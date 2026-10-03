@@ -14,11 +14,14 @@ Model summary
   In strong-inversion saturation this reduces to Id = k'(W/L)(Vgs-Vt)^2/(2n).
 * Inverter VTC solved by vectorised bisection of Idn = Idp.
 * Transient response by RK2 integration of CL*dVout/dt = Idp - Idn.
+* Process-dependent second-order effects are applied through the EFFECTS
+  chain, selected by the flow's feature set (e.g. {"locos"}, {"sti", "cmp"}).
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 import math
+from typing import Callable, FrozenSet, List
 
 import numpy as np
 
@@ -128,21 +131,67 @@ def _mos(p: ProcessParams, polarity: str) -> Mosfet:
     )
 
 
-def nmos(p: ProcessParams) -> Mosfet:
-    return _mos(p, "n")
+# --------------------------------------------------------------------------
+# Second-order effects chain
+# --------------------------------------------------------------------------
+# An effect is f(p, mos, features) -> Mosfet.  It may adjust vt, kp, n, lam ...
+# and must return the device unchanged when its feature flag is absent.
+# Planned additions: short-channel effects (Vt roll-off, DIBL, velocity
+# saturation), LDD/silicide series resistance, gate tunnelling leakage.
+Effect = Callable[[ProcessParams, Mosfet, FrozenSet[str]], Mosfet]
 
 
-def pmos(p: ProcessParams) -> Mosfet:
-    return _mos(p, "p")
+def _xdm_cm(m: Mosfet) -> float:
+    """Maximum depletion width at threshold."""
+    return math.sqrt(2 * EPS_SI * 2 * m.phi_f / (Q * m.doping))
+
+
+def narrow_width_effect(p: ProcessParams, m: Mosfet, features: FrozenSet[str]) -> Mosfet:
+    """Isolation-dependent narrow-width Vt shift (qualitative teaching model).
+
+    LOCOS: the bird's beak and field implant add fringing depletion charge at
+    the channel edges -> |Vt| rises for narrow W:
+        d|Vt| = (Qdep/Cox) * pi*xdm / (2W)
+    STI: field crowding at the trench corners turns the edges on early ->
+    inverse narrow-width effect, |Vt| falls:
+        d|Vt| = -(Qdep/Cox) * xdm / (2W)
+    """
+    if "locos" in features:
+        k = math.pi / 2
+    elif "sti" in features:
+        k = -0.5
+    else:
+        return m
+    qdep_cox = m.gamma * math.sqrt(2 * m.phi_f)
+    d = qdep_cox * k * _xdm_cm(m) / (m.w_um * 1e-4)
+    sign = 1.0 if m.polarity == "n" else -1.0
+    return replace(m, vt=m.vt + sign * d)
+
+
+EFFECTS: List[Effect] = [narrow_width_effect]
+
+
+def nmos(p: ProcessParams, features: FrozenSet[str] = frozenset()) -> Mosfet:
+    m = _mos(p, "n")
+    for eff in EFFECTS:
+        m = eff(p, m, features)
+    return m
+
+
+def pmos(p: ProcessParams, features: FrozenSet[str] = frozenset()) -> Mosfet:
+    m = _mos(p, "p")
+    for eff in EFFECTS:
+        m = eff(p, m, features)
+    return m
 
 
 # --------------------------------------------------------------------------
 # Inverter
 # --------------------------------------------------------------------------
 
-def inverter_vout(p: ProcessParams, vin, n_iter: int = 60):
+def inverter_vout(p: ProcessParams, vin, n_iter: int = 60, features: FrozenSet[str] = frozenset()):
     """Static output voltage for input(s) vin (vectorised bisection)."""
-    mn, mp = nmos(p), pmos(p)
+    mn, mp = nmos(p, features), pmos(p, features)
     vin = np.atleast_1d(np.asarray(vin, dtype=float))
     lo = np.zeros_like(vin)
     hi = np.full_like(vin, p.vdd)
@@ -171,9 +220,9 @@ class VTCResult:
     i_short: np.ndarray = field(repr=False, default=None)
 
 
-def vtc(p: ProcessParams, npts: int = 601) -> VTCResult:
+def vtc(p: ProcessParams, npts: int = 601, features: FrozenSet[str] = frozenset()) -> VTCResult:
     vin = np.linspace(0.0, p.vdd, npts)
-    vout = inverter_vout(p, vin)
+    vout = inverter_vout(p, vin, features=features)
     gain = np.gradient(vout, vin)
     vm = float(np.interp(0.0, (vout - vin)[::-1], vin[::-1]))
     steep = np.where(gain < -1.0)[0]
@@ -183,7 +232,7 @@ def vtc(p: ProcessParams, npts: int = 601) -> VTCResult:
     else:
         vil = vih = vm
     voh, vol = float(vout[0]), float(vout[-1])
-    i_short = nmos(p).ids(vin, vout)
+    i_short = nmos(p, features).ids(vin, vout)
     return VTCResult(vin, vout, gain, vm, vil, vih, voh, vol,
                      voh - vih, vil - vol, float(-gain.min()), i_short)
 
@@ -209,9 +258,9 @@ def _cross(t, v, level, rising: bool, after: float) -> float:
     return float(tt[i] + (tt[i + 1] - tt[i]) * (level - vv[i]) / (vv[i + 1] - vv[i]))
 
 
-def transient(p: ProcessParams, nsteps: int = 3000) -> TransientResult:
+def transient(p: ProcessParams, nsteps: int = 3000, features: FrozenSet[str] = frozenset()) -> TransientResult:
     """Pulse response of the inverter driving CL."""
-    mn, mp = nmos(p), pmos(p)
+    mn, mp = nmos(p, features), pmos(p, features)
     cl = p.cload_ff * 1e-15
     i_drive = max(min(mn.idsat(p.vdd), mp.idsat(p.vdd)), 1e-12)
     tau = cl * p.vdd / i_drive
@@ -232,7 +281,7 @@ def transient(p: ProcessParams, nsteps: int = 3000) -> TransientResult:
 
     vin = vin_at(t)
     vout = np.empty_like(t)
-    v = float(inverter_vout(p, 0.0)[0])
+    v = float(inverter_vout(p, 0.0, features=features)[0])
     for k, tk in enumerate(t):
         vout[k] = v
         k1 = dvdt(tk, v)
@@ -265,12 +314,12 @@ class Summary:
     tran: TransientResult
 
 
-def summarize(p: ProcessParams) -> Summary:
-    mn, mp = nmos(p), pmos(p)
+def summarize(p: ProcessParams, features: FrozenSet[str] = frozenset()) -> Summary:
+    mn, mp = nmos(p, features), pmos(p, features)
     return Summary(
         cox=cox(p), vtn=mn.vt, vtp=mp.vt, kpn=mn.kp, kpp=mp.kp,
         gamma_n=mn.gamma, gamma_p=mp.gamma, ss_n=mn.ss_mv_dec, ss_p=mp.ss_mv_dec,
         idsat_n=mn.idsat(p.vdd), idsat_p=mp.idsat(p.vdd),
         ioff_n=float(mn.ids(0.0, p.vdd)), nd=p.nd_cm3,
-        vtc=vtc(p), tran=transient(p),
+        vtc=vtc(p, features=features), tran=transient(p, features=features),
     )

@@ -12,6 +12,7 @@ from panda3d.core import loadPrcFileData
 def parse():
     ap = argparse.ArgumentParser(description="Planar CMOS process 3D teaching demo (Panda3D)")
     ap.add_argument("--lang", choices=["zh", "en"], default="zh")
+    ap.add_argument("--flow", default=None, help="process flow: locos (default) | sti")
     ap.add_argument("--size", default="1600x900", help="window size, e.g. 1920x1080")
     ap.add_argument("--fullscreen", action="store_true")
     # headless screenshot helpers (used for testing / docs)
@@ -48,7 +49,7 @@ def main():
     i18n.set_lang(a.lang)
     from fabsim3d.app import CmosApp
 
-    app = CmosApp()
+    app = CmosApp({"flow": a.flow})
     if a.lang == "en" or i18n.LANG == "en":
         app.rebuild_ui()
     if a.cut is not None:
