@@ -68,7 +68,7 @@ class CmosApp(ShowBase):
             DGG.setDefaultFont(self.font)
             TextNode.setDefaultFont(self.font)
         else:
-            print("[cmos3d] 未找到中文字体，可设置环境变量 CMOS3D_FONT 或放入 fonts/ 目录; "
+            print("[fabsim3d] 未找到中文字体，可设置环境变量 FABSIM3D_FONT 或放入 fonts/ 目录; "
                   "no CJK font found, falling back to English")
             i18n.set_lang("en")
         setup_fonts(font_path)

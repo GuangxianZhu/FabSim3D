@@ -2,7 +2,7 @@ import math
 
 import numpy as np
 
-from cmos3d.device_model import (ProcessParams, cox, inverter_vout, nmos, pmos,
+from fabsim3d.device_model import (ProcessParams, cox, inverter_vout, nmos, pmos,
                                  summarize, transient, vtc)
 
 

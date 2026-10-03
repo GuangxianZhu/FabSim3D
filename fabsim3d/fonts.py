@@ -26,7 +26,7 @@ CANDIDATES = [
 
 
 def find_cjk_font() -> str | None:
-    env = os.environ.get("CMOS3D_FONT")
+    env = os.environ.get("FABSIM3D_FONT") or os.environ.get("CMOS3D_FONT")
     if env and os.path.exists(env):
         return env
     for c in CANDIDATES:

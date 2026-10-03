@@ -19,7 +19,7 @@ def tr(key: str, **kw) -> str:
 
 
 STRINGS = {
-    "app_title": ("CMOS 工艺 3D 演示", "CMOS Process 3D Demo"),
+    "app_title": ("FabSim3D · CMOS 工艺演示", "FabSim3D · CMOS Process"),
     "app_sub": ("平面 CMOS 前端工艺 · 教学版", "Planar CMOS front-end · teaching"),
     "prev": ("< 上一步", "< Prev"),
     "next": ("下一步 >", "Next >"),

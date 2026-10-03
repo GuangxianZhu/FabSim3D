@@ -1,6 +1,6 @@
-from cmos3d.device_model import ProcessParams
-from cmos3d.geometry import Solid, rect_area, rect_complement, split_box, surface_height
-from cmos3d.process_flow import DOMAIN, STEPS, Wafer, build_until, make_ctx, run_phase
+from fabsim3d.device_model import ProcessParams
+from fabsim3d.geometry import Solid, rect_area, rect_complement, split_box, surface_height
+from fabsim3d.process_flow import DOMAIN, STEPS, Wafer, build_until, make_ctx, run_phase
 
 
 def test_rect_complement_area():

@@ -1,4 +1,4 @@
-"""CMOS 工艺 3D 教学演示 —— 入口.
+"""FabSim3D —— CMOS 工艺 3D 教学演示 入口.
 
     python main.py                 # 正常启动
     python main.py --lang en       # 英文界面
@@ -33,7 +33,7 @@ def parse():
 def main():
     a = parse()
     w, h = a.size.lower().split("x")
-    prc = [f"win-size {w} {h}", "window-title CMOS 工艺 3D 演示 / CMOS Process 3D Demo",
+    prc = [f"win-size {w} {h}", "window-title FabSim3D · CMOS 工艺 3D 演示 / CMOS Process 3D Demo",
            "framebuffer-multisample 1", "multisamples 4", "sync-video 1", "text-encoding utf8",
            "audio-library-name null"]
     if a.fullscreen:
@@ -44,9 +44,9 @@ def main():
         prc.append("load-display p3tinydisplay")
     loadPrcFileData("", "\n".join(prc))
 
-    from cmos3d import i18n
+    from fabsim3d import i18n
     i18n.set_lang(a.lang)
-    from cmos3d.app import CmosApp
+    from fabsim3d.app import CmosApp
 
     app = CmosApp()
     if a.lang == "en" or i18n.LANG == "en":

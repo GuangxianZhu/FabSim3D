@@ -8,7 +8,7 @@ pytest.importorskip("panda3d")
 def app():
     from panda3d.core import loadPrcFileData
     loadPrcFileData("", "window-type offscreen\nload-display p3tinydisplay\naudio-library-name null\nwin-size 1280 720")
-    from cmos3d.app import CmosApp
+    from fabsim3d.app import CmosApp
     a = CmosApp()
     yield a
     a.destroy()
@@ -64,5 +64,5 @@ def test_params_lang_quiz(app):
 
 
 def STEPS_ANSWER(i):
-    from cmos3d.process_flow import STEPS
+    from fabsim3d.process_flow import STEPS
     return STEPS[i].quiz.answer

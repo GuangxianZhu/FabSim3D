@@ -1,4 +1,4 @@
-# CMOS 工艺 3D 教学演示 (Panda3D)
+# FabSim3D — CMOS 工艺 3D 教学演示 (Panda3D)
 
 平面 CMOS 前端工艺的交互式 3D 演示：从 P 型硅片开始，经过 N 阱、LOCOS 场氧、多晶硅栅、
 自对准源漏注入、ILD、接触孔和金属 1，最后得到一个 **CMOS 反相器**，并由工艺参数直接推导出它的**电学特性**。
@@ -16,7 +16,7 @@ python main.py --size 1920x1080 --fullscreen
 
 需要一个带中文字形的字体。程序会自动查找微软雅黑/黑体 (Windows)、苹方 (macOS)、
 Noto CJK/文泉驿 (Linux)；也可以把任意 `.ttf/.otf/.ttc` 放进 `fonts/` 目录，
-或设置环境变量 `CMOS3D_FONT=/path/to/font`。找不到字体时会自动切换到英文。
+或设置环境变量 `FABSIM3D_FONT=/path/to/font`。找不到字体时会自动切换到英文。
 
 ## 界面
 
@@ -45,7 +45,7 @@ Noto CJK/文泉驿 (Linux)；也可以把任意 `.ttf/.otf/.ttc` 放进 `fonts/`
 
 > 纵向尺寸做了夸张处理（薄膜被放大），以便观察。阱接触、钝化层、多层金属等省略。
 
-## 电学模型 (`cmos3d/device_model.py`)
+## 电学模型 (`fabsim3d/device_model.py`)
 
 - **阈值电压**：Vt = Vfb ± 2φF ± Qdep/Cox，采用双掺杂多晶硅栅（NMOS 用 n+ poly，PMOS 用 p+ poly），并计入固定氧化层电荷
 - **N 阱浓度**：Nd = 注入剂量 / 阱深 (2 µm)
@@ -57,14 +57,14 @@ Noto CJK/文泉驿 (Linux)；也可以把任意 `.ttf/.otf/.ttc` 放进 `fonts/`
 
 ```
 main.py                 入口 (命令行参数, 无界面截图)
-cmos3d/app.py           Panda3D 应用：三栏 UI、相机、步骤控制、测验、电学面板
-cmos3d/scene.py         晶圆渲染、动画、粒子、剖面、3D 标注、载流子
-cmos3d/process_flow.py  工艺流程数据 (步骤/子阶段/动作/说明/测验)
-cmos3d/geometry.py      x-z 截面凸多边形沿 y 拉伸的实体、矩形运算、保形淀积
-cmos3d/device_model.py  器件与反相器模型 (纯 numpy)
-cmos3d/plots.py         matplotlib → Panda3D 纹理
-cmos3d/materials.py     材料颜色与名称
-cmos3d/i18n.py          中英文字符串
+fabsim3d/app.py           Panda3D 应用：三栏 UI、相机、步骤控制、测验、电学面板
+fabsim3d/scene.py         晶圆渲染、动画、粒子、剖面、3D 标注、载流子
+fabsim3d/process_flow.py  工艺流程数据 (步骤/子阶段/动作/说明/测验)
+fabsim3d/geometry.py      x-z 截面凸多边形沿 y 拉伸的实体、矩形运算、保形淀积
+fabsim3d/device_model.py  器件与反相器模型 (纯 numpy)
+fabsim3d/plots.py         matplotlib → Panda3D 纹理
+fabsim3d/materials.py     材料颜色与名称
+fabsim3d/i18n.py          中英文字符串
 ```
 
 想加一步工艺，就在 `process_flow.STEPS` 里加一个 `Step`。动作有：`deposit`、`coat`、`expose`、`develop`、
