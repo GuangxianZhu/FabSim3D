@@ -7,10 +7,11 @@ import matplotlib
 matplotlib.use("Agg")
 from matplotlib import font_manager  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
+from matplotlib.ticker import FixedLocator, FuncFormatter, NullLocator  # noqa: E402
 from matplotlib.backends.backend_agg import FigureCanvasAgg  # noqa: E402
 
 from . import i18n  # noqa: E402
-from .device_model import ProcessParams, nmos, pmos, inverter_vout  # noqa: E402
+from .device_model import ProcessParams, nmos, pmos, inverter_vout, vt_vs_length  # noqa: E402
 
 # dark-surface palette (validated categorical slots 1/2 + text tokens)
 SURFACE = "#1a1a19"
@@ -76,8 +77,8 @@ class PlotRenderer:
         idn = mn.ids(v, p.vdd)
         idp = mp.ids(v, p.vdd)
         ax.semilogy(v, idn, color=C_N, lw=2, label=f"NMOS  Vtn={mn.vt:.2f} V")
-        ax.semilogy(v, idp, color=C_P, lw=2, ls="--", label=f"PMOS  |Vtp|={abs(mp.vt):.2f} V")
-        for vt, c in ((mn.vt, C_N), (abs(mp.vt), C_P)):
+        ax.semilogy(v, idp, color=C_P, lw=2, ls="--", label=f"PMOS  |Vtp|={mp.vt_mag:.2f} V")
+        for vt, c in ((mn.vt_mag, C_N), (mp.vt_mag, C_P)):
             ax.axvline(vt, color=c, lw=1, ls=":")
         ax.plot([vin], [mn.ids(vin, p.vdd)], "o", ms=8, color=C_N, mec=SURFACE, mew=2)
         ax.plot([p.vdd - vin], [mp.ids(p.vdd - vin, p.vdd)], "o", ms=8, color=C_P, mec=SURFACE, mew=2)
@@ -147,4 +148,35 @@ class PlotRenderer:
         ax.set_xlim(0, t_ps[-1])
         ax.set_ylim(-0.1 * p.vdd, 1.15 * p.vdd)
         self._legend(ax, "upper right")
+        return self._finish()
+
+    def vtl(self, p: ProcessParams, f=frozenset()):
+        """NMOS threshold vs gate length: roll-off (low Vds) and DIBL (Vds = VDD)."""
+        ax = self._ax(i18n.pick("NMOS 阈值电压随栅长变化 (短沟道效应)", "NMOS Vt vs gate length (short-channel effects)"),
+                      i18n.pick("栅长 L (µm, 对数)", "gate length L (µm, log)"), "Vtn (V)")
+        ls, lin, sat = vt_vs_length(p, f, "n")
+        ideal = nmos(p, frozenset()).vt_mag
+        ax.axhline(ideal, color=C_MUTED, lw=1, ls="--", label=i18n.pick("理想 (无二级效应)", "ideal (no 2nd-order effects)"))
+        if "ldd" in f:
+            _, _, sat0 = vt_vs_length(p, frozenset(f) - {"ldd"}, "n")
+            ax.plot(ls, sat0, color=C_MUTED, lw=1.4, ls=":",
+                    label=i18n.pick("无 LDD 深结, Vds = VDD", "no LDD (deep xj), Vds = VDD"))
+        ax.plot(ls, lin, color=C_N, lw=2, label="|Vds| = 0.05 V")
+        ax.plot(ls, sat, color=C_P, lw=2, label=f"|Vds| = VDD = {p.vdd:.1f} V")
+        m = nmos(p, f)
+        ax.plot([p.l_um], [m.vt_mag - m.dibl * 0.05], "o", ms=8, color=C_N, mec=SURFACE, mew=2)
+        ax.plot([p.l_um], [m.vt_mag - m.dibl * p.vdd], "o", ms=8, color=C_P, mec=SURFACE, mew=2)
+        ax.annotate(f"DIBL = {m.dibl * 1e3:.0f} mV/V", (p.l_um, m.vt_mag - m.dibl * p.vdd),
+                    textcoords="offset points", xytext=(10, -14), color=TEXT2, fontsize=10)
+        ax.set_xscale("log")
+        ax.set_xlim(ls[0], ls[-1])
+        ticks = [0.1, 0.18, 0.25, 0.5, 1, 2, 5]
+        ax.xaxis.set_major_locator(FixedLocator(ticks))
+        ax.xaxis.set_minor_locator(NullLocator())
+        ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
+        lo = min(float(sat.min()), 0.0)
+        if "ldd" in f:
+            lo = min(lo, float(sat0.min()))
+        ax.set_ylim(max(lo - 0.05, -0.6), ideal * 1.25 + 0.05)
+        self._legend(ax, "lower right")
         return self._finish()

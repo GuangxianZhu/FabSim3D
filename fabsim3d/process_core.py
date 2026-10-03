@@ -182,6 +182,10 @@ class Flow:
     features: FrozenSet[str] = frozenset()    # e.g. {"locos"} / {"sti", "cmp"}
     region_labels: List[tuple] = field(default_factory=list)   # (layer, zh, en, x, z)
     terminal_labels: List[tuple] = field(default_factory=list)  # (name, x, y)
+    defaults: Dict[str, float] = field(default_factory=dict)    # typical ProcessParams of the era
+
+    def default_params(self) -> ProcessParams:
+        return ProcessParams(**self.defaults)
 
     def step_index(self, key: str) -> int:
         return next(i for i, s in enumerate(self.steps) if s.key == key)
@@ -431,6 +435,75 @@ def gate_span(c: Ctx, key: str) -> Tuple[float, float]:
     g = c.lay[key]
     dx = c.faults.misalign.get("POLY", (0.0, 0.0))[0]
     return (g[0] + dx, g[1] + dx)
+
+
+SPACER_W = 0.22          # spacer foot width (display units)
+GATE_Y = (1.1, ACT_Y[1])  # y-extent of the gate body (where sidewall spacers sit)
+
+
+def spacer_span(c: Ctx, key: str) -> Tuple[float, float]:
+    """Gate x-extent widened by the sidewall spacers (mask for the deep S/D implant)."""
+    g = gate_span(c, key)
+    return (g[0] - SPACER_W, g[1] + SPACER_W)
+
+
+def _gate_top(w: Wafer, layer: str, g: Tuple[float, float]) -> float:
+    tops = [s.zmax for s in w.layers[layer].solids
+            if s.xmin >= g[0] - 1e-6 and s.xmax <= g[1] + 1e-6] if layer in w.layers else []
+    return max(tops) if tops else 0.4
+
+
+def _spacer_prism(edge: float, side: int, z0: float, z1: float, w: float, nseg: int = 6) -> Solid:
+    """Quarter-ellipse spacer cross-section against a gate edge (side=-1 left, +1 right)."""
+    import math
+    h = z1 - z0
+    arc = [(edge + side * w * math.sin(t), z0 + h * math.cos(t))
+           for t in (math.pi / 2 * k / nseg for k in range(nseg + 1))]
+    if side < 0:      # CCW: foot -> corner -> top -> arc back to foot
+        pts = [(edge - w, z0), (edge, z0)] + arc[:-1]
+    else:
+        pts = [(edge, z0), (edge + w, z0)] + list(reversed(arc))[1:-1] + [(edge, z1)]
+    s = Solid(pts, *GATE_Y)
+    s.anchor = z0
+    return s
+
+
+def spacer_deposit(thickness=SPACER_W):
+    """Conformal spacer film: planar film everywhere plus sidewall coverage of the gates."""
+    def act(w: Wafer, c: Ctx, a: PhaseAnim):
+        snapshot = w.solids()
+        cells = conformal_cells(snapshot, [DOMAIN], DOMAIN, thickness=thickness * 0.6)
+        side = []
+        for layer, key in (("gate_n", "gn"), ("gate_p", "gp")):
+            g = gate_span(c, key)
+            top = _gate_top(w, layer, g)
+            for x0, x1 in ((g[0] - thickness, g[0]), (g[1], g[1] + thickness)):
+                b = Solid.box(x0, x1, GATE_Y[0], GATE_Y[1], 0.0, top + thickness * 0.6)
+                b.anchor = 0.0
+                side.append(b)
+        w.layer("spacer_film", "spacer").solids = cells + side
+        a.grow.extend(cells + side)
+        a.particles.append(ParticleSpec("depo", (0.5, 0.85, 0.6, 1), None, 90, snapshot))
+    return act
+
+
+def spacer_etchback():
+    """Anisotropic etch-back: the film is cleared from flat surfaces, leaving
+    rounded spacers on the gate sidewalls."""
+    def act(w: Wafer, c: Ctx, a: PhaseAnim):
+        film = w.remove("spacer_film")
+        if film:
+            a.ghosts += [("spacer", s, "etch") for s in film.solids]
+        sp = []
+        for layer, key in (("gate_n", "gn"), ("gate_p", "gp")):
+            g = gate_span(c, key)
+            top = _gate_top(w, layer, g)
+            sp.append(_spacer_prism(g[0], -1, 0.0, top, SPACER_W))
+            sp.append(_spacer_prism(g[1], +1, 0.0, top, SPACER_W))
+        w.layer("spacer", "spacer").solids = sp
+        a.fade_in.extend(sp)
+        a.particles.append(ParticleSpec("plasma", (1.0, 0.45, 0.85, 1), None, 140, w.solids()))
+    return act
 
 
 def sd_rects(act, g) -> List[Rect]:

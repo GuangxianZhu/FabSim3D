@@ -52,6 +52,7 @@ STRINGS = {
     "plot_idvd": ("Id-Vd", "Id-Vd"),
     "plot_vtc": ("VTC", "VTC"),
     "plot_tran": ("瞬态", "Transient"),
+    "plot_vtl": ("Vt-L", "Vt-L"),
     "vin": ("输入 Vin = {v:.2f} V", "Input Vin = {v:.2f} V"),
     "sim3d": ("3D 载流子仿真", "3D carrier sim"),
     "play_tran": ("播放瞬态", "Play transient"),

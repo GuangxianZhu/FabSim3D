@@ -87,14 +87,15 @@ def test_ild_cmp_flat():
 def test_isolation_narrow_width_effect():
     p = ProcessParams(wn_um=0.5)
     vt_ideal = summarize_cached(p).vtn
-    assert summarize_cached(p, LOCOS.features).vtn > vt_ideal           # LOCOS: Vt up
-    assert summarize_cached(p, STI.features).vtn < vt_ideal             # STI: inverse NWE
+    assert summarize_cached(p, frozenset({"locos"})).vtn > vt_ideal     # LOCOS: Vt up
+    assert summarize_cached(p, frozenset({"sti"})).vtn < vt_ideal       # STI: inverse NWE
 
 
 def test_dopant_and_thermal_records():
     w = build_until(make_ctx(ProcessParams(nwell_dose_cm2=5e13), STI), len(STI.steps) - 1)
-    species = [(d.species, d.polarity) for d in w.dopants]
-    assert species == [("P", "n"), ("As", "n"), ("BF2", "p")]
+    species = [(d.step, d.species, d.polarity) for d in w.dopants]
+    assert species == [("nwell_implant_he", "P", "n"), ("nldd", "P", "n"), ("pldd", "BF2", "p"),
+                       ("nplus_sp", "As", "n"), ("pplus_sp", "BF2", "p")]
     assert w.dopants[0].dose_cm2 == 5e13 and w.dopants[0].step == "nwell_implant_he"
     assert len(w.thermal) >= 3 and all(t.temp_c > 800 for t in w.thermal)
 
@@ -110,3 +111,33 @@ def test_fault_misalignment_and_skip():
     assert abs(nx(bad) - nx(ok) - 0.6) < 1e-9
     skipped = build_until(make_ctx(p, LOCOS, Faults(skip=frozenset({"nplus"}))), len(LOCOS.steps) - 1)
     assert not skipped.has("nplus")
+
+
+def test_spacers_and_ldd_structure():
+    from fabsim3d.process_core import SPACER_W, gate_span
+    ctx = make_ctx(ProcessParams(), STI)
+    film = build_until(ctx, STI.step_index("spacer_dep"))
+    assert film.has("spacer_film") and not film.has("spacer")
+    w = build_until(ctx, len(STI.steps) - 1)
+    assert not w.has("spacer_film") and len(w.layers["spacer"].solids) == 4
+    for s in w.layers["spacer"].solids:                       # convex, CCW cross-sections
+        pts = s.poly
+        area = sum(pts[i][0] * pts[(i + 1) % len(pts)][1] - pts[(i + 1) % len(pts)][0] * pts[i][1]
+                   for i in range(len(pts))) / 2
+        assert area > 0
+    g0 = gate_span(ctx, "gn")[0]
+    n_edge = max(s.xmax for s in w.layers["nplus"].solids if s.xmax < g0 + 0.5)
+    ldd_edge = max(s.xmax for s in w.layers["nldd"].solids if s.xmax < g0 + 0.5)
+    # deep n+ stays back by about a spacer width; LDD reaches under the gate edge
+    assert g0 - SPACER_W < n_edge < g0
+    assert ldd_edge > g0
+    assert max(s.zmin for s in w.layers["nldd"].solids) > min(s.zmin for s in w.layers["nplus"].solids)
+
+
+def test_flow_default_params_are_era_typical():
+    lo = summarize_cached(LOCOS.default_params(), LOCOS.features)
+    hi = summarize_cached(STI.default_params(), STI.features)
+    assert LOCOS.default_params().vdd > STI.default_params().vdd
+    for s in (lo, hi):
+        assert 0.3 < s.vtn < 0.6 and -0.6 < s.vtp < -0.3
+    assert hi.tran.tphl < lo.tran.tphl          # newer generation is faster

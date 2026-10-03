@@ -1,15 +1,17 @@
-"""~0.25 µm CMOS flow: shallow-trench isolation (STI) with CMP planarisation.
+"""~0.25 µm CMOS flow: STI + CMP isolation, LDD extensions and sidewall spacers.
 
-Front half is new (trench etch, liner, HDP fill, CMP, retrograde n-well,
-ILD CMP); gate, source/drain, contact and metal steps are shared with the
-LOCOS flow.
+New relative to LOCOS: trench etch, liner, HDP fill, CMP, retrograde n-well,
+LDD implants, spacer deposition/etch-back, spacer-aligned S/D, ILD CMP.
+Gate, contact and metal steps are shared with the LOCOS flow.
 """
 from __future__ import annotations
 
 from dataclasses import replace
 
 from ..geometry import Solid
-from ..process_core import (Flow, Phase, Step, actives, anneal, cmp, deposit, implant, litho,
+from ..process_core import (SPACER_W, Flow, Phase, Step, actives, anneal, cmp, deposit,
+                            gate_span, implant, litho, recolor, sd_annealed, sd_rects,
+                            spacer_deposit, spacer_etchback, spacer_span,
                             nwe_text, pattern, quiz, recess, replace_layer, sci, strip, summarize_cached,
                             vt_text)
 from . import locos
@@ -198,9 +200,145 @@ STEPS = [
     _L["poly_dep"],
     _L["gate_litho"],
     _L["gate_etch"],
-    _L["nplus"],
-    _L["pplus"],
-    _L["sd_anneal"],
+
+    Step("nldd", ("N- LDD 注入 (掩膜 4)", "n- LDD implant (mask 4)"),
+         ("光刻胶盖住 PMOS 区，以多晶硅栅为掩膜做一次低剂量、低能量的磷/砷注入，在栅边形成浅而淡的"
+          "N- 延伸区 (轻掺杂漏 LDD)。它降低了漏端电场，从而抑制热载流子注入和短沟道效应。",
+          "With resist over the PMOS, a low-dose, low-energy implant self-aligned to the poly gate "
+          "forms shallow, lightly doped n- extensions (LDD). They soften the drain field, "
+          "reducing hot-carrier injection and short-channel effects."),
+         [("离子", "Species", lambda c: "P+ / As+"),
+          ("剂量", "Dose", lambda c: "≈ 2e13 cm^-2 (约为 N+ 的 1/200)"),
+          ("能量", "Energy", lambda c: "≈ 20 keV"),
+          ("结深 xj", "Junction depth xj", lambda c: "≈ 80 nm")],
+         litho(lambda c: [c.lay["nwell"]], mask="NSELECT") + [
+             Phase("低剂量 LDD 注入 (自对准栅极)", "Low-dose LDD implant (gate-aligned)", 2.0,
+                   [implant("nldd", "n_ldd", lambda c: sd_rects(c.lay["act_n"], gate_span(c, "gn")), -0.12,
+                            (1.0, 0.6, 0.6, 1), species="P", dose=2e13, energy_kev=20)]),
+             Phase("去除光刻胶", "Strip resist", 1.0, [strip("resist")])],
+         quiz("LDD 的主要作用是？", "Main purpose of the LDD?",
+              [("降低漏端峰值电场，抑制热载流子", "Lower the peak drain field, suppress hot carriers"),
+               ("提高源漏导电性", "Make S/D more conductive"), ("作为栅介质", "Act as gate dielectric"),
+               ("隔离器件", "Isolate devices")], 0,
+              "淡掺杂区让漏端电势变化更平缓，峰值电场下降，代价是多了一段串联电阻。",
+              "The lightly doped region spreads the drain potential drop; the price is extra series resistance."),
+         ("N+ 选择", "NSELECT")),
+
+    Step("pldd", ("P- LDD 注入 (掩膜 5)", "p- LDD implant (mask 5)"),
+         ("光刻胶盖住 NMOS 区，对 PMOS 做低能 BF2 注入形成 P- 延伸区。BF2 分子较重，注入更浅。",
+          "With resist over the NMOS, a low-energy BF2 implant forms the p- extensions. The heavy "
+          "BF2 molecule gives an even shallower profile."),
+         [("离子", "Species", lambda c: "BF2+"),
+          ("剂量", "Dose", lambda c: "≈ 2e13 cm^-2"),
+          ("能量", "Energy", lambda c: "≈ 15 keV")],
+         litho(lambda c: [c.lay["pside"]], mask="PSELECT") + [
+             Phase("低剂量 LDD 注入 (自对准栅极)", "Low-dose LDD implant (gate-aligned)", 2.0,
+                   [implant("pldd", "p_ldd", lambda c: sd_rects(c.lay["act_p"], gate_span(c, "gp")), -0.12,
+                            (0.55, 0.7, 1.0, 1), species="BF2", dose=2e13, energy_kev=15)]),
+             Phase("去除光刻胶", "Strip resist", 1.0, [strip("resist")])],
+         quiz("为什么 PMOS 常用 BF2 而不是 B 做浅注入？", "Why use BF2 rather than B for shallow p-type implants?",
+              [("BF2 质量大，同能量下射程更浅", "BF2 is heavier, so it stops shallower at the same energy"),
+               ("BF2 更便宜", "BF2 is cheaper"), ("B 是 N 型杂质", "B is n-type"), ("BF2 不需要退火", "BF2 needs no anneal")], 0,
+              "硼原子很轻、射程长；BF2 分子把能量分给 F 原子，硼的有效能量只有约 22%。",
+              "Boron is light and travels far; in BF2 the B atom carries only ~22% of the energy."),
+         ("P+ 选择", "PSELECT")),
+
+    Step("spacer_dep", ("侧墙介质淀积", "Spacer dielectric deposition"),
+         ("用 LPCVD 保形淀积一层 Si3N4 (或 TEOS 氧化物)。保形淀积意味着栅极侧壁上也覆盖了同样厚度的薄膜，"
+          "栅边的竖直方向厚度最大。",
+          "A conformal LPCVD Si3N4 (or TEOS oxide) film is deposited. Being conformal, it coats "
+          "the gate sidewalls too, so the vertical thickness is largest right next to the gate."),
+         [("材料", "Material", lambda c: "Si3N4 / TEOS"),
+          ("厚度", "Thickness", lambda c: "≈ 80-100 nm"),
+          ("方法", "Method", lambda c: "LPCVD 700-780 °C")],
+         [Phase("保形淀积侧墙介质", "Conformal spacer film", 1.8, [spacer_deposit()])],
+         quiz("为什么侧墙介质必须是“保形”淀积？", "Why must the spacer film be conformal?",
+              [("这样栅侧壁上才有足够厚度，回刻后留下侧墙", "So the sidewalls get coated and a spacer remains after etch-back"),
+               ("为了导电", "To conduct"), ("为了更快", "To go faster"), ("为了透明", "To be transparent")], 0,
+              "各向异性回刻按竖直厚度去除；栅边竖直方向最厚，刚好留下来。",
+              "The anisotropic etch removes a fixed vertical thickness; the film beside the gate is tallest and survives.")),
+
+    Step("spacer_etch", ("侧墙回刻", "Spacer etch-back"),
+         ("不用掩膜，直接各向异性干法刻蚀整片晶圆。平面上的薄膜被刻掉，栅极两侧留下圆弧形的侧墙。"
+          "侧墙宽度决定了后面重掺杂源漏离沟道有多远，也就是 LDD 区的长度。",
+          "A maskless anisotropic etch clears the film from flat surfaces, leaving rounded spacers "
+          "on both sides of each gate. The spacer width sets how far the heavy S/D implant stays "
+          "from the channel, i.e. the LDD length."),
+         [("刻蚀", "Etch", lambda c: "RIE CF4/CHF3, 无掩膜 / maskless"),
+          ("侧墙宽度", "Spacer width", lambda c: "≈ 80 nm"),
+          ("过刻", "Over-etch", lambda c: "≈ 10-20 %")],
+         [Phase("各向异性回刻，形成侧墙", "Anisotropic etch-back forms spacers", 2.2, [spacer_etchback()])],
+         quiz("侧墙回刻为什么不需要光刻掩膜？", "Why does the spacer etch-back need no mask?",
+              [("利用栅极台阶和各向异性刻蚀自对准形成", "Gate topography + anisotropic etch make it self-aligned"),
+               ("掩膜太贵", "Masks are too expensive"), ("侧墙会自己长出来", "Spacers grow by themselves"),
+               ("用了湿法", "It is a wet etch")], 0,
+              "这是又一个自对准结构：形状完全由栅极决定。",
+              "Another self-aligned structure: its shape is set entirely by the gate.")),
+
+    Step("nplus_sp", ("N+ 源漏注入 (以侧墙对准)", "n+ S/D implant (spacer-aligned)"),
+         ("再次用 N+ 选择掩膜，做高剂量砷注入。这次挡住注入的是“栅 + 侧墙”，所以深而浓的 N+ 区离沟道有一段距离，"
+          "中间留下 LDD 区。",
+          "Using the NSELECT mask again, a high-dose arsenic implant is blocked by gate + spacers, "
+          "so the deep n+ region sits back from the channel and the LDD remains in between."),
+         [("离子", "Species", lambda c: "As+"),
+          ("剂量", "Dose", lambda c: "5e15 cm^-2"),
+          ("能量", "Energy", lambda c: "≈ 40 keV")],
+         litho(lambda c: [c.lay["nwell"]], mask="NSELECT") + [
+             Phase("砷离子注入 (以侧墙为掩膜)", "Arsenic implant (spacer-masked)", 2.2,
+                   [implant("nplus", "n_plus", lambda c: sd_rects(c.lay["act_n"], spacer_span(c, "gn")), -0.3,
+                            (1.0, 0.35, 0.3, 1), species="As", dose=5e15, energy_kev=40),
+                    recolor("gate_n", "poly_n")]),
+             Phase("去除光刻胶", "Strip resist", 1.0, [strip("resist")])],
+         quiz("加了侧墙之后，N+ 注入的边界由什么决定？", "With spacers, what defines the n+ implant edge?",
+              [("侧墙外边缘", "The outer spacer edge"), ("栅极边缘", "The gate edge"),
+               ("有源区边缘", "The active-area edge"), ("接触孔", "The contact hole")], 0,
+              "栅 + 侧墙一起当掩膜，N+ 与沟道之间相隔一个侧墙宽度。",
+              "Gate plus spacers mask the implant, so n+ is one spacer width away from the channel."),
+         ("N+ 选择", "NSELECT")),
+
+    Step("pplus_sp", ("P+ 源漏注入 (以侧墙对准)", "p+ S/D implant (spacer-aligned)"),
+         ("光刻胶盖住 NMOS，对 PMOS 做高剂量 BF2 注入，同样以栅 + 侧墙对准。",
+          "With resist over the NMOS, a high-dose BF2 implant into the PMOS, again aligned to gate + spacers."),
+         [("离子", "Species", lambda c: "BF2+"),
+          ("剂量", "Dose", lambda c: "3e15 cm^-2"),
+          ("能量", "Energy", lambda c: "≈ 30 keV")],
+         litho(lambda c: [c.lay["pside"]], mask="PSELECT") + [
+             Phase("硼离子注入 (以侧墙为掩膜)", "Boron implant (spacer-masked)", 2.2,
+                   [implant("pplus", "p_plus", lambda c: sd_rects(c.lay["act_p"], spacer_span(c, "gp")), -0.3,
+                            (0.4, 0.6, 1.0, 1), species="BF2", dose=3e15, energy_kev=30),
+                    recolor("gate_p", "poly_p")]),
+             Phase("去除光刻胶", "Strip resist", 1.0, [strip("resist")])],
+         quiz("LDD 结构的代价是什么？", "What is the cost of the LDD structure?",
+              [("增加源漏串联电阻，驱动电流略降", "Extra S/D series resistance, slightly less drive"),
+               ("栅氧变厚", "Thicker gate oxide"), ("Vt 变成负值", "Vt goes negative"), ("无法做 PMOS", "No PMOS possible")], 0,
+              "淡掺杂区电阻较高；后来用硅化物 (Salicide) 降低源漏电阻来弥补。",
+              "The light region is resistive; later silicide (salicide) was added to win it back."),
+         ("P+ 选择", "PSELECT")),
+
+    Step("sd_anneal_ldd", ("源漏激活退火 (RTA)", "Source/drain activation anneal (RTA)"),
+         ("快速热退火激活所有注入。LDD 略微扩散到栅下形成交叠，深 N+/P+ 区扩散到侧墙下方，"
+          "最终在沟道两端形成“浅 LDD + 深源漏”的阶梯结构。",
+          "RTA activates all implants. The LDD diffuses slightly under the gate for overlap and the "
+          "deep n+/p+ reaches under the spacers, giving the stepped 'shallow LDD + deep S/D' profile."),
+         [("方法", "Method", lambda c: "RTA 1000 °C, 10 s"),
+          ("LDD 结深", "LDD depth", lambda c: "≈ 80 nm"),
+          ("源漏结深", "S/D depth", lambda c: "≈ 0.15 µm"),
+          ("→ DIBL (NMOS)", "→ DIBL (NMOS)", lambda c: f"{summarize_cached(c.p, c.features).dibl_n:.0f} mV/V")],
+         [Phase("快速热退火：激活 + 扩散", "RTA: activation + diffusion", 2.0,
+                [replace_layer("nldd", "n_ldd", lambda c: sd_annealed(c.lay["act_n"], gate_span(c, "gn"), 0.06, -0.15),
+                               requires="nldd"),
+                 replace_layer("pldd", "p_ldd", lambda c: sd_annealed(c.lay["act_p"], gate_span(c, "gp"), 0.06, -0.15),
+                               requires="pldd"),
+                 replace_layer("nplus", "n_plus", lambda c: sd_annealed(c.lay["act_n"], spacer_span(c, "gn"), 0.1, -0.4),
+                               requires="nplus"),
+                 replace_layer("pplus", "p_plus", lambda c: sd_annealed(c.lay["act_p"], spacer_span(c, "gp"), 0.1, -0.4),
+                               requires="pplus"),
+                 anneal(1000, 10, (1.0, 0.35, 0.1))])],
+         quiz("LDD 让短沟道效应变弱，主要是因为？", "LDD weakens short-channel effects mainly because…",
+              [("沟道两端的结更浅，漏端对沟道的控制变弱", "Shallower junctions at the channel ends weaken drain control"),
+               ("栅氧更厚", "Thicker oxide"), ("沟道更长", "A longer channel"), ("温度更低", "Lower temperature")], 0,
+              "结深 xj 越浅，电荷分享和 DIBL 越小。可在“电学特性 → Vt-L”图上对比。",
+              "Smaller xj means less charge sharing and DIBL; compare on the Electrical → Vt-L plot.")),
 
     Step("ild_cmp", ("ILD 淀积 + CMP", "ILD deposition + CMP"),
          ("淀积较厚的掺杂氧化物 (BPSG/PSG) 作为层间介质，然后用 CMP 磨平，取代 LOCOS 时代的高温回流。"
@@ -238,10 +376,12 @@ REGION_LABELS = [
 FLOW = Flow(
     key="sti",
     name=("STI + CMP 工艺", "STI + CMP"),
-    node=("约 0.25 µm 代：STI 隔离 + CMP + 倒掺杂阱",
-          "~0.25 µm era: STI + CMP + retrograde well"),
+    node=("约 0.25 µm 代：STI + CMP + LDD 侧墙",
+          "~0.25 µm era: STI + CMP + LDD spacers"),
     steps=STEPS,
-    features=frozenset({"sti", "cmp"}),
+    features=frozenset({"sti", "cmp", "ldd", "sce"}),
     region_labels=REGION_LABELS,
     terminal_labels=locos.TERMINAL_LABELS,
+    defaults=dict(tox_nm=5.0, na_cm3=6e17, nwell_dose_cm2=1.2e14, l_um=0.25, wn_um=1.0, wp_um=2.5,
+                  vdd=2.5, cload_ff=20.0, mu_n=300.0, mu_p=120.0),
 )
