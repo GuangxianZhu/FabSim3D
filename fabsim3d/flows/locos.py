@@ -445,7 +445,9 @@ FLOW = Flow(
     node=("约 1.0 µm 代：LOCOS 隔离 + 单 N 阱",
           "~1.0 µm era: LOCOS + single n-well"),
     steps=STEPS,
-    features=frozenset({"locos"}),
+    features=frozenset({"locos", "sce"}),
     region_labels=REGION_LABELS,
     terminal_labels=TERMINAL_LABELS,
+    defaults=dict(tox_nm=20.0, na_cm3=5e16, nwell_dose_cm2=1e13, l_um=1.0, wn_um=4.0, wp_um=10.0,
+                  vdd=5.0, cload_ff=100.0),
 )

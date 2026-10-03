@@ -75,3 +75,39 @@ def test_transient_delays():
 def test_summary_runs():
     s = summarize(ProcessParams())
     assert s.idsat_n > s.ioff_n * 1e6
+
+
+SCE = frozenset({"sti", "sce"})
+SCE_LDD = SCE | {"ldd"}
+
+
+def test_vt_rolloff_and_dibl_grow_as_l_shrinks():
+    from fabsim3d.device_model import vt_vs_length
+    ls, lin, sat = vt_vs_length(ProcessParams(), SCE)
+    assert np.all(np.diff(lin) > 0)            # Vt rises towards long channel
+    dibl = lin - sat
+    assert np.all(np.diff(dibl) <= 1e-12)      # DIBL shrinks with L
+    long_ch = nmos(ProcessParams(l_um=5.0), frozenset({"sce"}))
+    assert abs(long_ch.vt - nmos(ProcessParams(l_um=5.0)).vt) < 0.02
+
+
+def test_ldd_reduces_dibl():
+    p = ProcessParams(l_um=0.25)
+    assert nmos(p, SCE_LDD).dibl < 0.5 * nmos(p, SCE).dibl
+    assert nmos(p, SCE_LDD).vt > nmos(p, SCE).vt
+
+
+def test_velocity_saturation_limits_current():
+    p = ProcessParams(l_um=0.25, lambda_um=0.0)
+    ideal = nmos(p).idsat(p.vdd)
+    m = nmos(p, frozenset({"sce"}))
+    assert m.idsat(p.vdd) < ideal
+    assert m.ec_l > 0
+
+
+def test_punch_through_device_is_normally_on():
+    """Extreme roll-off drives Vt negative: the device must conduct at Vgs = 0."""
+    p = ProcessParams(l_um=0.1, tox_nm=20, na_cm3=1e16)
+    m = nmos(p, frozenset({"sce"}))
+    assert m.vt_mag < 0
+    assert float(m.ids(0.0, p.vdd)) > 1e-5

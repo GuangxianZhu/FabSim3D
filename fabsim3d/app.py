@@ -74,8 +74,8 @@ class CmosApp(ShowBase):
             i18n.set_lang("en")
         setup_fonts(font_path)
 
-        self.params = ProcessParams()
         self.flow = FLOWS[(opts or {}).get("flow") or DEFAULT_FLOW]
+        self.params = self.flow.default_params()
         self.ctx = self._new_ctx()
         self.scene = WaferScene(self, self.render)
         self._setup_lights()
@@ -232,6 +232,8 @@ class CmosApp(ShowBase):
         if key == self.flow.key or key not in FLOWS:
             return
         self.flow = FLOWS[key]
+        self.params = self.flow.default_params()
+        self.vin = self.params.vdd / 2
         self.quiz_results = {}
         self.playing = False
         self.anim_step = None
@@ -370,7 +372,7 @@ class CmosApp(ShowBase):
         def sig(x):
             return 1 / (1 + math.exp(-max(min(x, 40), -40)))
         return {"vin": vin, "vout": vout, "vdd": p.vdd, "gnd": 0.0, "in": idn, "ip": idp,
-                "inv_n": sig((vin - mn.vt) / 0.08), "inv_p": sig((p.vdd - vin - abs(mp.vt)) / 0.08)}
+                "inv_n": sig((vin - mn.vt_mag) / 0.08), "inv_p": sig((p.vdd - vin - mp.vt_mag) / 0.08)}
 
     def _apply_sim(self):
         if self.sim3d and self.is_done():
@@ -423,6 +425,8 @@ class CmosApp(ShowBase):
             img = self.renderer.idvg(p, vin, self.flow.features)
         elif self.plot_kind == "idvd":
             img = self.renderer.idvd(p, vin, self.flow.features)
+        elif self.plot_kind == "vtl":
+            img = self.renderer.vtl(p, self.flow.features)
         elif self.plot_kind == "tran":
             img = self.renderer.tran(p, s, self.tran_cursor if self.tran_t is not None else None)
         else:
@@ -468,7 +472,7 @@ class CmosApp(ShowBase):
         self.last_plot = time.time()
 
     def reset_params(self):
-        self.params = ProcessParams()
+        self.params = self.flow.default_params()
         self.vin = self.params.vdd / 2
         self.goto(self.anim_step if self.anim_step is not None else self.step)
         self.rebuild_ui()
@@ -675,8 +679,9 @@ class CmosApp(ShowBase):
         et = DirectFrame(parent=f, frameColor=(0, 0, 0, 0))
         self.tab_elec = et
         self.plot_btns = {}
-        kinds = (("idvg", "plot_idvg"), ("idvd", "plot_idvd"), ("vtc", "plot_vtc"), ("tran", "plot_tran"))
-        bw = (RIGHT_W - 0.09) / 4
+        kinds = (("idvg", "plot_idvg"), ("idvd", "plot_idvd"), ("vtc", "plot_vtc"), ("tran", "plot_tran"),
+                 ("vtl", "plot_vtl"))
+        bw = (RIGHT_W - 0.06 - 0.01 * (len(kinds) - 1)) / len(kinds)
         for k, (kind, key) in enumerate(kinds):
             self.plot_btns[kind] = self._button(et, tr(key), (x0 + bw / 2 + k * (bw + 0.01), -0.15), bw,
                                                 lambda kind=kind: self._set_plot(kind),
@@ -866,10 +871,12 @@ class CmosApp(ShowBase):
         self.metrics_text.setText(
             f"Vtn = {s.vtn:+.3f} V\nVtp = {s.vtp:+.3f} V\n"
             f"Idsat,n = {s.idsat_n * 1e3:.3f} mA\nIdsat,p = {s.idsat_p * 1e3:.3f} mA\n"
-            f"Ioff,n = {s.ioff_n:.2e} A")
+            f"Ioff,n = {s.ioff_n:.2e} A\n"
+            f"xj = {s.xj_um * 1e3:.0f} nm")
         self.metrics_text2.setText(
             f"VM = {r.vm:.3f} V\nNMH = {r.nmh:.2f} V\nNML = {r.nml:.2f} V\n"
-            f"tpHL = {s.tran.tphl * 1e12:.1f} ps\ntpLH = {s.tran.tplh * 1e12:.1f} ps")
+            f"tpHL = {s.tran.tphl * 1e12:.1f} ps\ntpLH = {s.tran.tplh * 1e12:.1f} ps\n"
+            f"DIBL = {s.dibl_n:.0f} mV/V")
         # ---- params tab
         self.extract_text.setText(
             f"Cox = {s.cox * 1e7:.2f} fF/µm²\nk'n = {s.kpn * 1e6:.0f} µA/V²\nk'p = {s.kpp * 1e6:.0f} µA/V²\n"

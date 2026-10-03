@@ -48,6 +48,8 @@ class ProcessParams:
     cload_ff: float = 50.0        # inverter load capacitance
     mu_n: float = 400.0           # effective electron mobility cm^2/Vs
     mu_p: float = 150.0           # effective hole mobility cm^2/Vs
+    vsat_n: float = 1.0e7         # electron saturation velocity cm/s
+    vsat_p: float = 8.0e6         # hole saturation velocity cm/s
     qf_cm2: float = 1.0e10        # fixed oxide charge density
     lambda_um: float = 0.05       # CLM: lambda = lambda_um / L[um]  (1/V)
 
@@ -73,6 +75,17 @@ class Mosfet:
     phi_f: float         # |Fermi potential| (V)
     vfb: float           # flat-band voltage (V)
     doping: float        # channel doping (cm^-3)
+    # short-channel extensions (all zero = long-channel model)
+    dibl: float = 0.0    # DIBL coefficient sigma: |Vt| drops by sigma*|Vds|  (V/V)
+    ec_l: float = 0.0    # Ec*L for velocity saturation (V); 0 disables it
+    xj_um: float = 0.0   # S/D junction depth seen by the channel (um), informative
+    vt_rolloff: float = 0.0  # |Vt| reduction from charge sharing (V), informative
+
+    @property
+    def vt_mag(self) -> float:
+        """Threshold in magnitude convention (positive = enhancement) for both polarities.
+        It can go negative when short-channel roll-off turns the device normally-on."""
+        return self.vt if self.polarity == "n" else -self.vt
 
     @property
     def beta(self) -> float:
@@ -89,12 +102,17 @@ class Mosfet:
         """
         vgs = np.asarray(vgs, dtype=float)
         vds = np.asarray(vds, dtype=float)
-        vt = abs(self.vt)
+        vt = self.vt_mag - self.dibl * np.abs(vds)
         vp = (vgs - vt) / self.n
         i_s = 2.0 * self.n * self.beta * PHIT ** 2
         f_fwd = np.logaddexp(0.0, vp / (2 * PHIT)) ** 2
         f_rev = np.logaddexp(0.0, (vp - vds) / (2 * PHIT)) ** 2
-        return i_s * (f_fwd - f_rev) * (1.0 + self.lam * np.abs(vds))
+        i = i_s * (f_fwd - f_rev) * (1.0 + self.lam * np.abs(vds))
+        if self.ec_l > 0:
+            # velocity saturation: mobility degraded by the lateral field
+            vdse = np.minimum(np.abs(vds), np.maximum(vp, 0.0))
+            i = i / (1.0 + vdse / self.ec_l)
+        return i
 
     def idsat(self, vov_gate: float) -> float:
         return float(self.ids(vov_gate, vov_gate))
@@ -136,8 +154,7 @@ def _mos(p: ProcessParams, polarity: str) -> Mosfet:
 # --------------------------------------------------------------------------
 # An effect is f(p, mos, features) -> Mosfet.  It may adjust vt, kp, n, lam ...
 # and must return the device unchanged when its feature flag is absent.
-# Planned additions: short-channel effects (Vt roll-off, DIBL, velocity
-# saturation), LDD/silicide series resistance, gate tunnelling leakage.
+# Planned additions: LDD/silicide series resistance, gate tunnelling leakage.
 Effect = Callable[[ProcessParams, Mosfet, FrozenSet[str]], Mosfet]
 
 
@@ -168,7 +185,40 @@ def narrow_width_effect(p: ProcessParams, m: Mosfet, features: FrozenSet[str]) -
     return replace(m, vt=m.vt + sign * d)
 
 
-EFFECTS: List[Effect] = [narrow_width_effect]
+XJ_DEEP_UM = 0.25    # conventional S/D junction depth
+XJ_LDD_UM = 0.08     # shallow LDD extension at the channel edge
+
+
+def short_channel_effect(p: ProcessParams, m: Mosfet, features: FrozenSet[str]) -> Mosfet:
+    """Short-channel effects for real flows (feature "sce").
+
+    The junction depth seen by the channel is the LDD depth when the flow has
+    LDD ("ldd" feature), otherwise the deep S/D junction.
+
+    * Vt roll-off (Yau charge sharing):
+        d|Vt| = -(Qdep/Cox) * (xj/L) * (sqrt(1 + 2*xdm/xj) - 1)
+    * DIBL: |Vt| drops by sigma*|Vds|,  sigma = 0.6 * exp(-L / (2*l)),
+      characteristic length l = sqrt(eps_si/eps_ox * tox * xj)
+    * Velocity saturation: Id / (1 + Vds_eff/(Ec*L)),  Ec = 2*vsat/mu
+    """
+    if "sce" not in features:
+        return m
+    xj = (XJ_LDD_UM if "ldd" in features else XJ_DEEP_UM) * 1e-4
+    L = m.l_um * 1e-4
+    qdep_cox = m.gamma * math.sqrt(2 * m.phi_f)
+    xdm = _xdm_cm(m)
+    rolloff = qdep_cox * (xj / L) * (math.sqrt(1 + 2 * xdm / xj) - 1)
+    l_char = math.sqrt(EPS_SI / EPS_OX * p.tox_nm * 1e-7 * xj)
+    sigma = 0.6 * math.exp(-L / (2 * l_char))
+    mu = p.mu_n if m.polarity == "n" else p.mu_p
+    vsat = p.vsat_n if m.polarity == "n" else p.vsat_p
+    ec_l = 2 * vsat / mu * L
+    sign = 1.0 if m.polarity == "n" else -1.0
+    return replace(m, vt=m.vt - sign * rolloff, dibl=sigma, ec_l=ec_l,
+                   xj_um=xj * 1e4, vt_rolloff=rolloff)
+
+
+EFFECTS: List[Effect] = [narrow_width_effect, short_channel_effect]
 
 
 def nmos(p: ProcessParams, features: FrozenSet[str] = frozenset()) -> Mosfet:
@@ -312,6 +362,11 @@ class Summary:
     nd: float
     vtc: VTCResult
     tran: TransientResult
+    dibl_n: float = 0.0        # mV/V
+    dibl_p: float = 0.0
+    rolloff_n: float = 0.0     # V
+    rolloff_p: float = 0.0
+    xj_um: float = 0.0
 
 
 def summarize(p: ProcessParams, features: FrozenSet[str] = frozenset()) -> Summary:
@@ -322,4 +377,21 @@ def summarize(p: ProcessParams, features: FrozenSet[str] = frozenset()) -> Summa
         idsat_n=mn.idsat(p.vdd), idsat_p=mp.idsat(p.vdd),
         ioff_n=float(mn.ids(0.0, p.vdd)), nd=p.nd_cm3,
         vtc=vtc(p, features=features), tran=transient(p, features=features),
+        dibl_n=mn.dibl * 1e3, dibl_p=mp.dibl * 1e3, rolloff_n=mn.vt_rolloff,
+        rolloff_p=mp.vt_rolloff, xj_um=mn.xj_um,
     )
+
+
+def vt_vs_length(p: ProcessParams, features: FrozenSet[str], polarity: str = "n",
+                 l_min: float = 0.1, l_max: float = 5.0, npts: int = 80):
+    """|Vt| versus gate length at low |Vds| (0.05 V) and at |Vds| = VDD.
+
+    Returns (L_um, vt_lin, vt_sat).  Shows Vt roll-off (lin) and DIBL (sat - lin).
+    """
+    ls = np.geomspace(l_min, l_max, npts)
+    lin, sat = [], []
+    for L in ls:
+        m = (nmos if polarity == "n" else pmos)(p.copy(l_um=float(L)), features)
+        lin.append(m.vt_mag - m.dibl * 0.05)
+        sat.append(m.vt_mag - m.dibl * p.vdd)
+    return ls, np.array(lin), np.array(sat)

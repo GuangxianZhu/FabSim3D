@@ -21,7 +21,7 @@ def parse():
     ap.add_argument("--anim", type=float, default=None,
                     help="with --step: animate that step and capture after this many seconds")
     ap.add_argument("--tab", choices=["process", "elec", "params"], default=None)
-    ap.add_argument("--plot", choices=["idvg", "idvd", "vtc", "tran"], default=None)
+    ap.add_argument("--plot", choices=["idvg", "idvd", "vtc", "tran", "vtl"], default=None)
     ap.add_argument("--cut", type=float, default=None, help="enable cross-section at y")
     ap.add_argument("--sim", action="store_true", help="enable 3D carrier simulation")
     ap.add_argument("--vin", type=float, default=None)
