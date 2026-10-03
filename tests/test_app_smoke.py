@@ -21,9 +21,11 @@ def run(app, seconds, speed=1.0):
         app.taskMgr.step()
 
 
-def test_play_through_all_steps(app):
+@pytest.mark.parametrize("flow", ["locos", "sti"])
+def test_play_through_all_steps(app, flow):
+    app.set_flow(flow)
     app.goto(0)
-    for i in range(1, 22):
+    for i in range(1, len(app.steps)):
         app.next_step()
         assert app.anim_step == i
         run(app, 9, speed=6.0)
@@ -32,7 +34,7 @@ def test_play_through_all_steps(app):
 
 
 def test_simulation_and_transient(app):
-    app.goto(21)
+    app.goto(len(app.steps) - 1)
     app.right_tab = "elec"
     app.toggle_sim3d()
     assert app.scene.sim_values is not None
@@ -45,6 +47,7 @@ def test_simulation_and_transient(app):
 
 
 def test_params_lang_quiz(app):
+    app.set_flow("locos")
     app.goto(13)
     sl = app.param_widgets[3]          # gate length
     sl["value"] = 0.9
@@ -55,14 +58,9 @@ def test_params_lang_quiz(app):
     app._toggle_lang()
     app.quiz_enabled = True
     app.show_quiz(5)
-    app._answer(5, STEPS_ANSWER(5))
+    app._answer(5, app.steps[5].quiz.answer)
     assert app.quiz_results[5] is True
     app._close_quiz()
     assert app.quiz_frame is None
     app.prev_step()
     assert app.step == 12
-
-
-def STEPS_ANSWER(i):
-    from fabsim3d.process_flow import STEPS
-    return STEPS[i].quiz.answer

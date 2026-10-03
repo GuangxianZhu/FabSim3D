@@ -21,6 +21,8 @@ _M = [
     Material("resist", (0.45, 0.10, 0.45, 1), "光刻胶", "Photoresist", 4),
     Material("resist_exp", (0.85, 0.55, 0.90, 1), "已曝光光刻胶", "Exposed resist", 4),
     Material("fox", (0.62, 0.62, 0.66, 1), "场氧化层 (LOCOS)", "Field oxide (LOCOS)", 4),
+    Material("sti_ox", (0.70, 0.74, 0.82, 1), "STI 填充氧化物 (HDP)", "STI fill oxide (HDP)", 4),
+    Material("liner_ox", (0.88, 0.88, 0.92, 1), "衬垫氧化层", "Liner oxide", 5),
     Material("gate_ox", (0.92, 0.92, 0.95, 1), "栅氧化层", "Gate oxide", 4),
     Material("poly", (0.80, 0.45, 0.35, 1), "多晶硅", "Polysilicon", 5),
     Material("poly_n", (0.85, 0.30, 0.30, 1), "N+ 多晶硅栅", "n+ poly gate", 5),

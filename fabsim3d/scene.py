@@ -12,8 +12,7 @@ from panda3d.core import (Geom, GeomLines, GeomNode, GeomTriangles, GeomVertexDa
 from . import i18n
 from .geometry import Solid, surface_height
 from .materials import mat
-from .process_flow import (DOMAIN, REGION_LABELS, TERMINAL_LABELS, PhaseAnim,
-                           Wafer)
+from .process_core import DOMAIN, PhaseAnim, Wafer
 
 EDGE_COLOR = (0.08, 0.08, 0.10, 0.55)
 
@@ -141,6 +140,7 @@ class WaferScene:
         self.layer_nodes: Dict[str, NodePath] = {}
         self.ghost_node: Optional[NodePath] = None
         self.mask_node: Optional[NodePath] = None
+        self.pad_node: Optional[NodePath] = None
         self.fx = parent.attachNewNode("fx")
         self.fx.setLightOff()
         self.labels_root = parent.attachNewNode("labels")
@@ -254,6 +254,8 @@ class WaferScene:
         self.spawn_acc = 0.0
         if anim.mask:
             self._build_mask(anim.mask)
+        if anim.pad is not None:
+            self._build_pad()
         self._refresh_anim_layers()
 
     def _anim_layers(self):
@@ -288,6 +290,7 @@ class WaferScene:
                 self._rebuild_layer(name)
             self._rebuild_ghosts()
             self._update_mask()
+            self._update_pad()
             self._update_glow()
             self._spawn_particles(dt * speed)
         self._update_particles(dt * speed)
@@ -304,6 +307,9 @@ class WaferScene:
         if self.mask_node:
             self.mask_node.removeNode()
             self.mask_node = None
+        if self.pad_node:
+            self.pad_node.removeNode()
+            self.pad_node = None
         self.root.clearColorScale()
         if self.wafer:
             self.rebuild_all()
@@ -338,6 +344,38 @@ class WaferScene:
         a = min(1.0, t / 0.15) if t < 0.85 else max(0.0, (1 - t) / 0.15)
         self.mask_node.setAlphaScale(a)
         self.mask_node.setZ((1 - min(1.0, t / 0.2)) * 1.5)
+
+    def _build_pad(self):
+        """CMP polishing pad: a translucent grooved pad riding on the surface being polished."""
+        if self.pad_node:
+            self.pad_node.removeNode()
+        self.pad_node = self.base.render.attachNewNode("cmp_pad")
+        y0, y1 = max(self.cut_y, 0.0) - 0.3, 8.3
+        items = [(Solid.box(-1.5, 21.5, y0, y1, 0.0, 0.3), (0.55, 0.60, 0.72, 0.45))]
+        for k in range(12):          # grooves
+            x = -1.0 + k * 1.9
+            items.append((Solid.box(x, x + 0.25, y0, y1, -0.02, 0.0), (0.85, 0.88, 0.95, 0.55)))
+        pad = build_solids_node("pad", items, -99, False)
+        pad.reparentTo(self.pad_node)
+        pad.setTransparency(TransparencyAttrib.MAlpha)
+        pad.setDepthWrite(False)
+        pad.setBin("transparent", 30)
+        self.pad_node.setLightOff()
+        tops = [s.zmax for _, s, _ in self.anim.ghosts]
+        self.pad_start = max(tops) if tops else self.anim.pad
+        self._update_pad()
+
+    def _update_pad(self):
+        if not self.pad_node or not self.anim or self.anim.pad is None:
+            return
+        t = self.anim_t
+        e = _ease(t)
+        lower = min(1.0, t / 0.08)
+        up = max(0.0, (t - 0.92) / 0.08)
+        surface = self.pad_start - (self.pad_start - self.anim.pad) * e
+        z = surface + 0.02 + (1 - lower) * 2.0 + up * 2.0
+        self.pad_node.setPos(math.sin(t * 60) * 0.5, 0, z)
+        self.pad_node.setAlphaScale(1.0 - up)
 
     def _update_glow(self):
         g = self.anim.glow if self.anim else None
@@ -438,12 +476,13 @@ class WaferScene:
         animating_out = set()
         if self.anim:
             animating_out = {m for m, _, _ in self.anim.ghosts}
-        for layer, zh, en, x, z in REGION_LABELS:
+        flow = self.ctx.flow if self.ctx else None
+        for layer, zh, en, x, z in (flow.region_labels if flow else []):
             if self.wafer.has(layer) and layer not in animating_out:
                 self._label(i18n.pick(zh, en), (x, yf, z), 0.38)
         if self.terminal_mode:
             vals = self.sim_values or {}
-            for name, x, y in TERMINAL_LABELS:
+            for name, x, y in (flow.terminal_labels if flow else []):
                 text = name
                 key = name.lower()
                 if key in vals:

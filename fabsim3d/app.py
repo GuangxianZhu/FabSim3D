@@ -20,7 +20,8 @@ from .fonts import find_cjk_font
 from .i18n import tr
 from .materials import MATERIALS, mat
 from .plots import PlotRenderer, setup_fonts
-from .process_flow import STEPS, build_until, make_ctx, run_phase, summarize_cached, sci
+from .flows import DEFAULT_FLOW, FLOWS
+from .process_core import Wafer, build_until, is_skipped, make_ctx, run_phase, sci, summarize_cached
 from .scene import WaferScene
 
 # ---------------------------------------------------------------- style
@@ -74,7 +75,8 @@ class CmosApp(ShowBase):
         setup_fonts(font_path)
 
         self.params = ProcessParams()
-        self.ctx = make_ctx(self.params)
+        self.flow = FLOWS[(opts or {}).get("flow") or DEFAULT_FLOW]
+        self.ctx = self._new_ctx()
         self.scene = WaferScene(self, self.render)
         self._setup_lights()
 
@@ -217,13 +219,34 @@ class CmosApp(ShowBase):
         self.update_camera()
 
     # ================================================================= process control
+    @property
+    def steps(self):
+        return self.flow.steps
+
+    def _new_ctx(self):
+        faults = getattr(self, "faults", None)
+        return make_ctx(self.params, self.flow, faults)
+
+    def set_flow(self, key: str):
+        """Switch technology generation (process flow)."""
+        if key == self.flow.key or key not in FLOWS:
+            return
+        self.flow = FLOWS[key]
+        self.quiz_results = {}
+        self.playing = False
+        self.anim_step = None
+        self.phase_queue = []
+        self.step = 0
+        self.goto(0)
+        self.rebuild_ui()
+
     def goto(self, i: int):
         """Show the state after step i without animation."""
-        i = max(0, min(i, len(STEPS) - 1))
+        i = max(0, min(i, len(self.steps) - 1))
         self.scene.clear_particles()
         self.phase_queue = []
         self.anim_step = None
-        self.ctx = make_ctx(self.params)
+        self.ctx = self._new_ctx()
         self.wafer = build_until(self.ctx, i)
         self.step = i
         self.caption = ("", "")
@@ -232,24 +255,27 @@ class CmosApp(ShowBase):
         self.refresh_ui()
 
     def is_done(self):
-        return self.step == len(STEPS) - 1 and self.anim_step is None
+        return self.step == len(self.steps) - 1 and self.anim_step is None
 
     def animate_step(self, i: int):
-        if i < 0 or i >= len(STEPS):
+        if i < 0 or i >= len(self.steps):
             return
         if self.anim_step is not None or self.step != i - 1:
             self.goto(i - 1) if i > 0 else self._blank()
         self.anim_step = i
         self.scene.terminal_mode = False
         self.scene.set_sim(None)
-        self.phase_queue = list(STEPS[i].phases)
+        self.wafer.current_step = self.steps[i].key
+        self.phase_queue = [] if is_skipped(self.ctx, self.steps[i]) else list(self.steps[i].phases)
+        if not self.phase_queue:
+            self._phase_finished()
+            return
         self._next_phase()
         self.refresh_ui()
 
     def _blank(self):
-        from .process_flow import Wafer
         self.wafer = Wafer()
-        self.ctx = make_ctx(self.params)
+        self.ctx = self._new_ctx()
         self.scene.set_wafer(self.wafer, self.ctx)
         self.step = -1
 
@@ -273,9 +299,9 @@ class CmosApp(ShowBase):
             self._apply_sim()
         self.refresh_ui()
         self.play_wait = 0.9
-        if self.quiz_enabled and STEPS[self.step].quiz and self.step not in self.quiz_results:
+        if self.quiz_enabled and self.steps[self.step].quiz and self.step not in self.quiz_results:
             self.show_quiz(self.step)
-        if self.step == len(STEPS) - 1:
+        if self.step == len(self.steps) - 1:
             self.playing = False
             self._refresh_play_btn()
 
@@ -284,7 +310,7 @@ class CmosApp(ShowBase):
             return
         if self.anim_step is not None:
             self.goto(self.anim_step)
-        elif self.step < len(STEPS) - 1:
+        elif self.step < len(self.steps) - 1:
             self.animate_step(self.step + 1)
 
     def prev_step(self):
@@ -298,7 +324,7 @@ class CmosApp(ShowBase):
             return
         self.playing = not self.playing
         if self.playing and self.anim_step is None:
-            if self.step >= len(STEPS) - 1:
+            if self.step >= len(self.steps) - 1:
                 self.goto(0)
             self.play_wait = 0.0
         self._refresh_play_btn()
@@ -322,7 +348,7 @@ class CmosApp(ShowBase):
             self._phase_finished()
         if self.playing and self.anim_step is None and not self.quiz_frame:
             self.play_wait -= dt * self.speed
-            if self.play_wait <= 0 and self.step < len(STEPS) - 1:
+            if self.play_wait <= 0 and self.step < len(self.steps) - 1:
                 self.animate_step(self.step + 1)
         if self.tran_t is not None:
             self._advance_transient(dt)
@@ -335,9 +361,9 @@ class CmosApp(ShowBase):
     # ================================================================= electrical
     def _sim_values(self, vin, vout=None):
         p = self.params
-        mn, mp = nmos(p), pmos(p)
+        mn, mp = nmos(p, self.flow.features), pmos(p, self.flow.features)
         if vout is None:
-            vout = float(inverter_vout(p, vin)[0])
+            vout = float(inverter_vout(p, vin, features=self.flow.features)[0])
         idn = float(mn.ids(vin, max(vout, 0.0)))
         idp = float(mp.ids(p.vdd - vin, max(p.vdd - vout, 0.0)))
 
@@ -354,7 +380,7 @@ class CmosApp(ShowBase):
             self.scene.set_sim(None)
 
     def _advance_transient(self, dt):
-        s = summarize_cached(self.params)
+        s = summarize_cached(self.params, self.flow.features)
         dur = 5.0
         self.tran_t += dt
         if self.tran_t > dur:
@@ -391,16 +417,16 @@ class CmosApp(ShowBase):
 
     def _redraw_plot(self):
         p = self.params
-        s = summarize_cached(p)
+        s = summarize_cached(p, self.flow.features)
         vin = min(self.vin, p.vdd)
         if self.plot_kind == "idvg":
-            img = self.renderer.idvg(p, vin)
+            img = self.renderer.idvg(p, vin, self.flow.features)
         elif self.plot_kind == "idvd":
-            img = self.renderer.idvd(p, vin)
+            img = self.renderer.idvd(p, vin, self.flow.features)
         elif self.plot_kind == "tran":
             img = self.renderer.tran(p, s, self.tran_cursor if self.tran_t is not None else None)
         else:
-            img = self.renderer.vtc(p, vin, s)
+            img = self.renderer.vtc(p, vin, s, self.flow.features)
         self.plot_tex.setRamImageAs(img.tobytes(), "RGBA")
         self.plot_dirty = False
         self.last_plot = time.time()
@@ -428,7 +454,7 @@ class CmosApp(ShowBase):
     def _commit_params(self):
         self.params_dirty = False
         self.vin = min(self.vin, self.params.vdd)
-        new_ctx = make_ctx(self.params)
+        new_ctx = self._new_ctx()
         if abs(new_ctx.lay["gl"] - self.ctx.lay["gl"]) > 1e-9:
             if self.anim_step is not None:
                 self.goto(self.anim_step)
@@ -449,7 +475,7 @@ class CmosApp(ShowBase):
 
     # ================================================================= quiz
     def show_quiz(self, i):
-        q = STEPS[i].quiz
+        q = self.steps[i].quiz
         self.resume_after_quiz = self.playing
         self.playing = False
         f = DirectFrame(parent=self.aspect2d, frameColor=(0.06, 0.065, 0.08, 0.97),
@@ -469,7 +495,7 @@ class CmosApp(ShowBase):
         self.quiz_continue = self._button(f, tr("skip"), (0.48, -0.54), 0.24, self._close_quiz)
 
     def _answer(self, i, k):
-        q = STEPS[i].quiz
+        q = self.steps[i].quiz
         if i in self.quiz_results:
             return
         ok = k == q.answer
@@ -488,7 +514,7 @@ class CmosApp(ShowBase):
         if self.quiz_frame:
             self.quiz_frame.destroy()
             self.quiz_frame = None
-        if self.resume_after_quiz and self.step < len(STEPS) - 1:
+        if self.resume_after_quiz and self.step < len(self.steps) - 1:
             self.playing = True
             self.play_wait = 0.3
         self._refresh_play_btn()
@@ -563,11 +589,18 @@ class CmosApp(ShowBase):
         f = DirectFrame(parent=self.a2dTopLeft, frameColor=PANEL, frameSize=(0, LEFT_W, -2.0, 0))
         self.ui_roots.append(f)
         self._text(f, tr("app_title"), (0.03, -0.075), 0.052, ACCENT)
-        self._text(f, tr("app_sub"), (0.03, -0.125), 0.03, TXT2)
+        self._text(f, i18n.pick(*self.flow.node), (0.03, -0.118), 0.024, TXT2, wrap=LEFT_W - 0.06)
+        self.flow_btns = {}
+        keys = list(FLOWS)
+        fw = (LEFT_W - 0.06 - 0.01 * (len(keys) - 1)) / len(keys)
+        for k, key in enumerate(keys):
+            self.flow_btns[key] = self._button(
+                f, i18n.pick(*FLOWS[key].name), (0.03 + fw / 2 + k * (fw + 0.01), -0.205), fw,
+                lambda key=key: self.set_flow(key), on=key == self.flow.key, scale=0.029)
 
-        n = len(STEPS)
+        n = len(self.steps)
         row = 0.05
-        sf = DirectScrolledFrame(parent=f, frameSize=(0.02, LEFT_W - 0.02, -1.0, -0.16),
+        sf = DirectScrolledFrame(parent=f, frameSize=(0.02, LEFT_W - 0.02, -1.0, -0.245),
                                  canvasSize=(0, LEFT_W - 0.08, -n * row - 0.01, 0),
                                  frameColor=(0.06, 0.065, 0.075, 1), scrollBarWidth=0.022,
                                  verticalScroll_frameColor=(0.12, 0.13, 0.15, 1),
@@ -578,7 +611,7 @@ class CmosApp(ShowBase):
         self.step_list = sf
         canvas = sf.getCanvas()
         self.step_btns = []
-        for i, st in enumerate(STEPS):
+        for i, st in enumerate(self.steps):
             b = self._button(canvas, f"{i + 1:02d}  {i18n.pick(*st.title)}", (0.005, -(i + 0.6) * row),
                              LEFT_W - 0.085, lambda i=i: self.jump_to(i), align="left", scale=0.03,
                              height=row * 0.95)
@@ -590,7 +623,7 @@ class CmosApp(ShowBase):
         self._button(f, tr("next"), (0.60, y), 0.22, self.next_step)
         y -= 0.075
         self._button(f, tr("reset"), (0.20, y), 0.34, lambda: self.goto(0))
-        self._button(f, tr("to_end"), (0.55, y), 0.34, lambda: self.goto(len(STEPS) - 1))
+        self._button(f, tr("to_end"), (0.55, y), 0.34, lambda: self.goto(len(self.steps) - 1))
         y -= 0.075
         self.speed_text = self._text(f, tr("speed", v=self.speed), (0.04, y), 0.028, TXT2)
         self.speed_slider = self._slider(f, (0.36, y + 0.01), 0.34, (self.speed - 0.25) / 2.75, self._set_speed)
@@ -769,6 +802,8 @@ class CmosApp(ShowBase):
                 col = BTN
             b["frameColor"] = (col, BTN_PRESS, BTN_HOVER, BTN)
         self._refresh_play_btn()
+        for key, b in self.flow_btns.items():
+            self._set_on(b, key == self.flow.key)
         for key, b in self.tab_btns.items():
             self._set_on(b, key == self.right_tab)
         for key, b in self.plot_btns.items():
@@ -786,8 +821,8 @@ class CmosApp(ShowBase):
         self.tab_params.show() if self.right_tab == "params" else self.tab_params.hide()
 
         # ---- process tab
-        st = STEPS[max(cur, 0)]
-        self.step_no_text.setText(tr("step_n", i=max(cur, 0) + 1, n=len(STEPS)))
+        st = self.steps[max(cur, 0)]
+        self.step_no_text.setText(tr("step_n", i=max(cur, 0) + 1, n=len(self.steps)))
         self.title_text.setText(i18n.pick(*st.title))
         self._refresh_caption()
         self.desc_text.setText(self.wrap(i18n.pick(*st.desc), RIGHT_W - 0.07, 0.031))
@@ -821,7 +856,7 @@ class CmosApp(ShowBase):
             self._text(self.legend_frame, i18n.pick(mat(m).zh, mat(m).en), (cx + 0.05, cy), 0.026, TXT2)
 
         # ---- electrical
-        s = summarize_cached(self.params)
+        s = summarize_cached(self.params, self.flow.features)
         p = self.params
         if self.vin > p.vdd:
             self.vin = p.vdd

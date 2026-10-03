@@ -1,156 +1,14 @@
-"""Planar CMOS front-end process flow (n-well, LOCOS, poly gate, Al metal 1).
-
-The flow is data: a list of Step objects, each made of animated Phases, each
-phase a list of actions that mutate a Wafer and describe how to animate the
-change (PhaseAnim).  Nothing here imports Panda3D.
-"""
+"""Classic ~1 µm CMOS flow: single n-well, LOCOS isolation, Al metal 1."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import List
 
-from .device_model import ProcessParams, summarize
-from .geometry import (Rect, Solid, conformal_cells, rect_complement,
-                       rect_intersect, split_box)
+from ..geometry import Solid, rect_complement, split_box
+from ..process_core import (DOMAIN, ACT_Y, SUB_DEPTH, Ctx, Flow, Phase, PhaseAnim, Step, Wafer,
+                            actives, anneal, contacts, gate_span, coat, deposit, develop, expose, gates, glow,
+                            implant, litho, metal, nwe_text, pattern, quiz, recolor, replace_layer, sci,
+                            sd_annealed, sd_rects, split_gates, strip, summarize_cached, vt_text)
 
-DOMAIN: Rect = (0.0, 20.0, 0.0, 8.0)
-SUB_DEPTH = 3.0
-ACT_Y = (1.5, 6.5)
-
-
-# --------------------------------------------------------------------------
-# Wafer state
-# --------------------------------------------------------------------------
-
-@dataclass
-class Layer:
-    name: str
-    material: str
-    solids: List[Solid] = field(default_factory=list)
-
-
-class Wafer:
-    def __init__(self):
-        self.layers: Dict[str, Layer] = {}
-
-    def layer(self, name: str, material: Optional[str] = None) -> Layer:
-        if name not in self.layers:
-            self.layers[name] = Layer(name, material or name)
-        return self.layers[name]
-
-    def solids(self, exclude=()) -> List[Solid]:
-        return [s for n, l in self.layers.items() if n not in exclude for s in l.solids]
-
-    def remove(self, name: str) -> Optional[Layer]:
-        return self.layers.pop(name, None)
-
-    def has(self, name: str) -> bool:
-        return name in self.layers and bool(self.layers[name].solids)
-
-
-@dataclass
-class ParticleSpec:
-    kind: str                      # ion | uv | plasma | depo
-    color: tuple
-    region: Optional[List[Rect]] = None   # spawn region(s); None = whole wafer
-    rate: float = 120.0            # particles per second
-    stop_solids: List[Solid] = field(default_factory=list)
-
-
-@dataclass
-class MaskSpec:
-    chrome: List[Rect]
-    z: float
-
-
-@dataclass
-class PhaseAnim:
-    grow: List[Solid] = field(default_factory=list)
-    fade_in: List[Solid] = field(default_factory=list)
-    ghosts: List[Tuple[str, Solid, str]] = field(default_factory=list)  # (material, solid, etch|fade)
-    recolor: Dict[str, str] = field(default_factory=dict)              # layer -> old material
-    particles: List[ParticleSpec] = field(default_factory=list)
-    mask: Optional[MaskSpec] = None
-    glow: Optional[tuple] = None
-
-
-@dataclass
-class Ctx:
-    p: ProcessParams
-    lay: dict
-
-
-Action = Callable[[Wafer, Ctx, PhaseAnim], None]
-
-
-@dataclass
-class Phase:
-    zh: str
-    en: str
-    duration: float
-    actions: List[Action]
-
-
-@dataclass
-class Quiz:
-    q: Tuple[str, str]
-    options: List[Tuple[str, str]]
-    answer: int
-    explain: Tuple[str, str]
-
-
-@dataclass
-class Step:
-    key: str
-    title: Tuple[str, str]
-    desc: Tuple[str, str]
-    params: List[Tuple[str, str, Callable[[Ctx], str]]]
-    phases: List[Phase]
-    quiz: Optional[Quiz] = None
-    mask_name: Optional[Tuple[str, str]] = None
-
-
-# --------------------------------------------------------------------------
-# Layout (depends on drawn gate length)
-# --------------------------------------------------------------------------
-
-def layout(p: ProcessParams) -> dict:
-    gl = min(max(0.45 + 0.3 * p.l_um, 0.6), 1.8)
-    gnc, gpc = 5.25, 15.25
-    gn = (gnc - gl / 2, gnc + gl / 2)
-    gp = (gpc - gl / 2, gpc + gl / 2)
-    act_n = (2.0, 8.5, *ACT_Y)
-    act_p = (12.0, 18.5, *ACT_Y)
-
-    def gate_rects(g, c):
-        return [(g[0], g[1], 1.1, ACT_Y[1]),                 # over channel + end cap
-                (min(g[0], c - 0.5), max(g[1], c + 0.5), ACT_Y[1], 7.6)]  # contact pad on FOX
-
-    contacts = {
-        "n_src": (2.8, 3.9, 2.6, 4.4), "n_drn": (6.6, 7.7, 2.6, 4.4),
-        "p_drn": (12.8, 13.9, 2.6, 4.4), "p_src": (16.6, 17.7, 2.6, 4.4),
-        "g_n": (gnc - 0.3, gnc + 0.3, 6.8, 7.35), "g_p": (gpc - 0.3, gpc + 0.3, 6.8, 7.35),
-    }
-    metal = {
-        "GND": (2.4, 4.3, 0.3, 4.9), "VOUT": (6.2, 14.3, 2.2, 4.8),
-        "VDD": (16.2, 18.1, 0.3, 4.9), "VIN": (gnc - 0.5, gpc + 0.5, 6.6, 7.6),
-    }
-    return dict(
-        gl=gl, gn=gn, gp=gp, gnc=gnc, gpc=gpc, act_n=act_n, act_p=act_p,
-        nwell=(10.5, 20.0, 0.0, 8.0), pside=(0.0, 10.5, 0.0, 8.0),
-        gates_n=gate_rects(gn, gnc), gates_p=gate_rects(gp, gpc),
-        contacts=contacts, metal=metal,
-        fox_x=[(0.0, 2.0), (8.5, 12.0), (18.5, 20.0)],
-    )
-
-
-def make_ctx(p: ProcessParams) -> Ctx:
-    return Ctx(p, layout(p))
-
-
-# --------------------------------------------------------------------------
-# Action helpers
-# --------------------------------------------------------------------------
 
 def _locos_prism(a: float, b: float, y0: float, y1: float) -> Solid:
     top, bot, beak_in, beak_out = 0.35, -0.25, 0.35, 0.25
@@ -172,123 +30,10 @@ def _locos_prism(a: float, b: float, y0: float, y1: float) -> Solid:
     return s
 
 
-def deposit(layer, material, thickness=None, top=None, region=None, particles=None):
-    def act(w: Wafer, c: Ctx, a: PhaseAnim):
-        reg = region(c) if callable(region) else (region or [DOMAIN])
-        snapshot = w.solids()
-        cells = conformal_cells(snapshot, reg, DOMAIN, thickness=thickness, top=top,
-                                min_top_gap=0.1)
-        w.layer(layer, material).solids.extend(cells)
-        a.grow.extend(cells)
-        if particles:
-            a.particles.append(ParticleSpec(particles[0], particles[1], None, 90, snapshot))
-    return act
-
-
-def strip(layer, mode="etch"):
-    def act(w: Wafer, c: Ctx, a: PhaseAnim):
-        lay = w.remove(layer)
-        if lay:
-            a.ghosts += [(lay.material, s, mode) for s in lay.solids]
-    return act
-
-
-def pattern(layer, keep, particles=True):
-    """Etch `layer` everywhere except footprint rects keep(ctx)."""
-    def act(w: Wafer, c: Ctx, a: PhaseAnim):
-        if layer not in w.layers:
-            return
-        lay = w.layers[layer]
-        snapshot = w.solids()
-        kept_all = []
-        for s in lay.solids:
-            kept, removed = split_box(s, keep(c))
-            kept_all += kept
-            a.ghosts += [(lay.material, r, "etch") for r in removed]
-        lay.solids = kept_all
-        if particles:
-            a.particles.append(ParticleSpec("plasma", (1.0, 0.45, 0.85, 1), None, 140, snapshot))
-    return act
-
-
-def expose(keep, mask_z=3.0):
-    """Positive resist: area outside `keep` (mask openings) becomes exposed."""
-    def act(w: Wafer, c: Ctx, a: PhaseAnim):
-        lay = w.layers["resist"]
-        snapshot = w.solids()
-        kept_all, exp = [], []
-        for s in lay.solids:
-            kept, removed = split_box(s, keep(c))
-            kept_all += kept
-            exp += removed
-        lay.solids = kept_all
-        w.layer("resist_exp", "resist").solids = exp
-        a.recolor["resist_exp"] = "resist"
-        w.layers["resist_exp"].material = "resist_exp"
-        a.mask = MaskSpec(keep(c), mask_z)
-        a.particles.append(ParticleSpec("uv", (0.65, 0.35, 1.0, 1), rect_complement(DOMAIN, keep(c)),
-                                        160, snapshot))
-    return act
-
-
-def develop():
-    return strip("resist_exp", "etch")
-
-
-def coat():
-    return deposit("resist", "resist", thickness=0.45)
-
-
-def implant(layer, material, rects, z0=-0.3, ion_color=(1, 0.9, 0.2, 1)):
-    def act(w: Wafer, c: Ctx, a: PhaseAnim):
-        snapshot = w.solids()
-        new = [Solid.box(r[0], r[1], r[2], r[3], z0, 0.0) for r in rects(c)]
-        w.layer(layer, material).solids.extend(new)
-        a.fade_in.extend(new)
-        a.particles.append(ParticleSpec("ion", ion_color, None, 220, snapshot))
-    return act
-
-
-def recolor(layer, material):
-    def act(w: Wafer, c: Ctx, a: PhaseAnim):
-        if layer in w.layers:
-            a.recolor[layer] = w.layers[layer].material
-            w.layers[layer].material = material
-    return act
-
-
-def glow(color=(1.0, 0.55, 0.2)):
-    def act(w: Wafer, c: Ctx, a: PhaseAnim):
-        a.glow = color
-    return act
-
-
-def _replace(layer, material, solids_fn, anchor=None, mode="fade"):
-    def act(w: Wafer, c: Ctx, a: PhaseAnim):
-        old = w.remove(layer)
-        if old:
-            a.ghosts += [(old.material, s, "fade") for s in old.solids]
-        new = solids_fn(c)
-        for s in new:
-            s.anchor = anchor
-        w.layer(layer, material).solids = new
-        (a.grow if mode == "grow" else a.fade_in).extend(new)
-    return act
-
-
-# geometry recipes -------------------------------------------------------------
-
-def _actives(c: Ctx) -> List[Rect]:
-    return [c.lay["act_n"], c.lay["act_p"]]
-
-
-def _sd_rects(act, g) -> List[Rect]:
-    return [(act[0], g[0], act[2], act[3]), (g[1], act[1], act[2], act[3])]
-
 
 def _fox_solids(c: Ctx) -> List[Solid]:
     out = [_locos_prism(a, b, 0.0, 8.0) for a, b in c.lay["fox_x"]]
-    for act in _actives(c):
+    for act in actives(c):
         out.append(Solid.box(act[0], act[1], 0.0, ACT_Y[0], -0.25, 0.35))
         out.append(Solid.box(act[0], act[1], ACT_Y[1], 8.0, -0.25, 0.35))
     for s in out:
@@ -304,78 +49,12 @@ def _locos(w: Wafer, c: Ctx, a: PhaseAnim):
     if pad:
         kept_all = []
         for s in pad.solids:
-            kept, removed = split_box(s, _actives(c))
+            kept, removed = split_box(s, actives(c))
             kept_all += kept
             a.ghosts += [("pad_ox", r, "fade") for r in removed]
         pad.solids = kept_all
     a.glow = (1.0, 0.45, 0.15)
 
-
-def _split_gates(w: Wafer, c: Ctx, a: PhaseAnim):
-    lay = w.remove("poly")
-    if not lay:
-        return
-    w.layer("gate_n", "poly").solids = [s for s in lay.solids if s.xmax < 10.5]
-    w.layer("gate_p", "poly").solids = [s for s in lay.solids if s.xmin >= 10.5]
-
-
-def _sd_annealed(act, g, grow=0.15, depth=-0.42):
-    left = (act[0], g[0] + grow, act[2], act[3])
-    right = (g[1] - grow, act[1], act[2], act[3])
-    return [Solid.box(r[0], r[1], r[2], r[3], depth, 0.0) for r in (left, right)]
-
-
-def _gates(c):
-    return c.lay["gates_n"] + c.lay["gates_p"]
-
-
-def _contacts(c):
-    return list(c.lay["contacts"].values())
-
-
-def _metal(c):
-    return list(c.lay["metal"].values())
-
-
-# --------------------------------------------------------------------------
-# Formatting helpers for parameter tables
-# --------------------------------------------------------------------------
-
-def sci(v: float, unit: str = "") -> str:
-    m, e = f"{v:.2e}".split("e")
-    return f"{m}e{int(e)} {unit}".strip()
-
-
-def _vt(c: Ctx, which: str) -> str:
-    s = summarize_cached(c.p)
-    return f"{(s.vtn if which == 'n' else s.vtp):+.3f} V"
-
-
-_SUM_CACHE: dict = {}
-
-
-def summarize_cached(p: ProcessParams):
-    key = tuple(sorted(vars(p).items()))
-    if key not in _SUM_CACHE:
-        _SUM_CACHE.clear()
-        _SUM_CACHE[key] = summarize(p)
-    return _SUM_CACHE[key]
-
-
-# --------------------------------------------------------------------------
-# The flow
-# --------------------------------------------------------------------------
-
-def _litho(mask_keep) -> List[Phase]:
-    return [
-        Phase("旋涂光刻胶", "Spin-coat photoresist", 1.2, [coat()]),
-        Phase("掩膜对准 + 紫外曝光", "Mask align + UV exposure", 2.2, [expose(mask_keep)]),
-        Phase("显影：去除曝光区光刻胶", "Develop: exposed resist dissolves", 1.2, [develop()]),
-    ]
-
-
-def _q(qzh, qen, opts, ans, ezh, een) -> Quiz:
-    return Quiz((qzh, qen), opts, ans, (ezh, een))
 
 
 STEPS: List[Step] = [
@@ -389,8 +68,8 @@ STEPS: List[Step] = [
           ("衬底/沟道掺杂 Na (硼)", "Substrate/channel Na (B)", lambda c: sci(c.p.na_cm3, "cm^-3")),
           ("硅片直径", "Wafer diameter", lambda c: "200 mm")],
          [Phase("准备硅片 (RCA 清洗)", "Wafer preparation (RCA clean)", 1.0,
-                [_replace("sub", "p_sub", lambda c: [Solid.box(0, 20, 0, 8, -SUB_DEPTH, 0)])])],
-         _q("为什么 CMOS 常用 <100> 晶向硅片？", "Why are <100> wafers preferred for CMOS?",
+                [replace_layer("sub", "p_sub", lambda c: [Solid.box(0, 20, 0, 8, -SUB_DEPTH, 0)])])],
+         quiz("为什么 CMOS 常用 <100> 晶向硅片？", "Why are <100> wafers preferred for CMOS?",
             [("硬度最高", "Highest hardness"), ("Si/SiO2 界面态密度最低", "Lowest Si/SiO2 interface-trap density"),
              ("最便宜", "Cheapest"), ("导热最好", "Best thermal conductivity")], 1,
             "<100> 面悬挂键少，界面态密度低，阈值电压更稳定、迁移率更高。",
@@ -405,8 +84,8 @@ STEPS: List[Step] = [
           ("厚度", "Thickness", lambda c: "≈ 20 nm"),
           ("反应", "Reaction", lambda c: "Si + O2 → SiO2")],
          [Phase("热氧化生长 SiO2", "Thermal oxide growth", 1.5,
-                [deposit("padox", "pad_ox", thickness=0.06), glow((1.0, 0.5, 0.2))])],
-         _q("热氧化时，SiO2 中约有多少厚度来自消耗的硅？", "During thermal oxidation, what fraction of the oxide thickness consumes silicon?",
+                [deposit("padox", "pad_ox", thickness=0.06), anneal(950, 1800, (1.0, 0.5, 0.2))])],
+         quiz("热氧化时，SiO2 中约有多少厚度来自消耗的硅？", "During thermal oxidation, what fraction of the oxide thickness consumes silicon?",
             [("0%", "0%"), ("约 44%", "About 44%"), ("100%", "100%"), ("约 10%", "About 10%")], 1,
             "生长 1 nm SiO2 约消耗 0.44 nm 硅，所以氧化层有一部分“长进”硅里。",
             "Growing 1 nm of SiO2 consumes ~0.44 nm of Si, so the oxide partly grows into the wafer.")),
@@ -419,8 +98,8 @@ STEPS: List[Step] = [
          [("光刻胶", "Resist", lambda c: "正胶 / positive, ~1 µm"),
           ("光源", "Source", lambda c: "i-line 365 nm"),
           ("掩膜", "Mask", lambda c: "#1 NWELL")],
-         _litho(lambda c: [c.lay["pside"]]),
-         _q("正性光刻胶被紫外光照射后会怎样？", "What happens to positive resist exposed to UV?",
+         litho(lambda c: [c.lay["pside"]], mask="NWELL"),
+         quiz("正性光刻胶被紫外光照射后会怎样？", "What happens to positive resist exposed to UV?",
             [("变硬并保留", "Hardens and stays"), ("在显影液中溶解", "Dissolves in developer"),
              ("变成金属", "Turns metallic"), ("不受影响", "Unaffected")], 1,
             "正胶曝光后分子链断裂、溶解度增大，显影时被去掉；负胶相反。",
@@ -436,10 +115,11 @@ STEPS: List[Step] = [
           ("剂量", "Dose", lambda c: sci(c.p.nwell_dose_cm2, "cm^-2")),
           ("能量", "Energy", lambda c: "≈ 150 keV"),
           ("推进后 Nd", "Nd after drive-in", lambda c: sci(c.p.nd_cm3, "cm^-3")),
-          ("→ PMOS Vtp", "→ PMOS Vtp", lambda c: _vt(c, "p"))],
+          ("→ PMOS Vtp", "→ PMOS Vtp", lambda c: vt_text(c, "p"))],
          [Phase("磷离子注入", "Phosphorus implant", 2.4,
-                [implant("nimp", "n_implant", lambda c: [c.lay["nwell"]], -0.3, (1.0, 0.85, 0.2, 1))])],
-         _q("N 阱注入剂量升高，PMOS 的 |Vtp| 会？", "If the n-well dose increases, |Vtp| of the PMOS will…",
+                [implant("nimp", "n_implant", lambda c: [c.lay["nwell"]], -0.3, (1.0, 0.85, 0.2, 1),
+                         species="P", dose=lambda c: c.p.nwell_dose_cm2, energy_kev=150)])],
+         quiz("N 阱注入剂量升高，PMOS 的 |Vtp| 会？", "If the n-well dose increases, |Vtp| of the PMOS will…",
             [("增大", "Increase"), ("减小", "Decrease"), ("不变", "Stay the same"), ("变为 0", "Become zero")], 0,
             "阱浓度越高，耗尽电荷 Qdep 越大，需要更大的栅压才能反型，|Vtp| 增大。可在“参数”页验证。",
             "Higher Nd means larger depletion charge, so |Vtp| rises. Try it on the Parameters tab.")),
@@ -454,10 +134,11 @@ STEPS: List[Step] = [
           ("阱深", "Well depth", lambda c: "≈ 2 µm")],
          [Phase("去除光刻胶", "Strip resist", 1.0, [strip("resist")]),
           Phase("高温推进：磷向下扩散", "High-temperature drive-in", 2.0,
-                [strip("nimp", "fade"),
-                 _replace("nwell", "n_well", lambda c: [Solid.box(10.5, 20, 0, 8, -1.8, 0)], anchor=0.0, mode="grow"),
-                 glow((1.0, 0.4, 0.1))])],
-         _q("阱推进退火的主要作用是？", "Main purpose of the drive-in anneal?",
+                [replace_layer("nwell", "n_well", lambda c: [Solid.box(10.5, 20, 0, 8, -1.8, 0)],
+                               anchor=0.0, mode="grow", requires="nimp"),
+                 strip("nimp", "fade"),
+                 anneal(1100, 6 * 3600, (1.0, 0.4, 0.1))])],
+         quiz("阱推进退火的主要作用是？", "Main purpose of the drive-in anneal?",
             [("去除光刻胶", "Remove resist"), ("让杂质扩散到所需深度并激活", "Diffuse dopants deeper and activate them"),
              ("沉积金属", "Deposit metal"), ("刻蚀氧化层", "Etch oxide")], 1,
             "注入只在表面附近，高温推进让杂质扩散到所需深度。",
@@ -473,7 +154,7 @@ STEPS: List[Step] = [
           ("厚度", "Thickness", lambda c: "≈ 100 nm")],
          [Phase("LPCVD 淀积 Si3N4", "LPCVD Si3N4", 1.6,
                 [deposit("nitride", "nitride", thickness=0.12, particles=("depo", (0.4, 0.9, 0.5, 1)))])],
-         _q("为什么用氮化硅作 LOCOS 掩蔽层？", "Why is nitride used as the LOCOS mask?",
+         quiz("为什么用氮化硅作 LOCOS 掩蔽层？", "Why is nitride used as the LOCOS mask?",
             [("导电性好", "It conducts well"), ("氧难以穿过氮化硅", "Oxygen barely diffuses through it"),
              ("透明", "It is transparent"), ("便于金属连接", "Helps metal contacts")], 1,
             "氮化硅的氧化速率极低，被它覆盖的区域不会长出厚场氧。",
@@ -486,8 +167,8 @@ STEPS: List[Step] = [
           "where transistors will be; everything else will become isolation field oxide."),
          [("掩膜", "Mask", lambda c: "#2 ACTIVE"),
           ("对准", "Alignment", lambda c: "对准 N 阱标记 / to NWELL marks")],
-         _litho(lambda c: _actives(c)),
-         _q("“有源区”指的是？", "What is the 'active area'?",
+         litho(lambda c: actives(c), mask="ACTIVE"),
+         quiz("“有源区”指的是？", "What is the 'active area'?",
             [("金属走线区", "Metal routing area"), ("晶体管沟道和源漏所在区域", "Where channels and source/drain sit"),
              ("场氧区", "Field-oxide area"), ("划片槽", "Scribe lane")], 1,
             "有源区就是将来做 MOS 管的薄氧区，其余为场区。",
@@ -500,9 +181,9 @@ STEPS: List[Step] = [
           "active areas. Then the resist is stripped."),
          [("刻蚀", "Etch", lambda c: "RIE, CF4/O2"),
           ("终点", "Endpoint", lambda c: "光学终点检测 / optical")],
-         [Phase("等离子体刻蚀 Si3N4", "Plasma etch Si3N4", 1.8, [pattern("nitride", _actives)]),
+         [Phase("等离子体刻蚀 Si3N4", "Plasma etch Si3N4", 1.8, [pattern("nitride", actives, mask="ACTIVE")]),
           Phase("去除光刻胶", "Strip resist", 1.0, [strip("resist")])],
-         _q("干法刻蚀相比湿法刻蚀最大的优点？", "Main advantage of dry (plasma) etching over wet?",
+         quiz("干法刻蚀相比湿法刻蚀最大的优点？", "Main advantage of dry (plasma) etching over wet?",
             [("各向异性，图形更精确", "Anisotropic, better pattern fidelity"), ("更便宜", "Cheaper"),
              ("不需要掩膜", "No mask needed"), ("速度慢", "Slower")], 0,
             "反应离子刻蚀有方向性，侧向钻蚀小，适合细线条。",
@@ -515,9 +196,10 @@ STEPS: List[Step] = [
           "isolating devices. Lateral oxidation under the nitride edge forms the 'bird's beak'."),
          [("温度", "Temperature", lambda c: "1000 °C, 湿氧 / wet O2"),
           ("场氧厚度", "FOX thickness", lambda c: "≈ 500 nm"),
-          ("特征", "Feature", lambda c: "鸟嘴 / bird's beak")],
-         [Phase("局部氧化：场氧生长", "Local oxidation grows field oxide", 2.6, [_locos])],
-         _q("LOCOS 的“鸟嘴”带来的主要问题是？", "Main drawback of the LOCOS bird's beak?",
+          ("特征", "Feature", lambda c: "鸟嘴 / bird's beak"),
+          ("窄宽度效应 ΔVtn", "Narrow-width ΔVtn", nwe_text)],
+         [Phase("局部氧化：场氧生长", "Local oxidation grows field oxide", 2.6, [_locos, anneal(1000, 4 * 3600)])],
+         quiz("LOCOS 的“鸟嘴”带来的主要问题是？", "Main drawback of the LOCOS bird's beak?",
             [("增加导电性", "Raises conductivity"), ("侵占有源区，限制集成度", "Eats into active area, limiting density"),
              ("让硅片变薄", "Thins the wafer"), ("降低温度", "Lowers temperature")], 1,
             "鸟嘴横向侵占有源区，因此先进工艺改用浅槽隔离 STI。",
@@ -531,7 +213,7 @@ STEPS: List[Step] = [
           ("SiO2 去除", "Oxide removal", lambda c: "稀 HF / dilute HF")],
          [Phase("热磷酸去除 Si3N4", "Hot H3PO4 removes nitride", 1.4, [strip("nitride")]),
           Phase("HF 去除垫氧", "HF removes pad oxide", 1.0, [strip("padox")])],
-         _q("为什么能单独去掉氮化硅而几乎不伤场氧？", "Why can nitride be removed without attacking the field oxide?",
+         quiz("为什么能单独去掉氮化硅而几乎不伤场氧？", "Why can nitride be removed without attacking the field oxide?",
             [("热磷酸对 Si3N4/SiO2 选择比很高", "Hot H3PO4 is highly selective to Si3N4 over SiO2"),
              ("场氧被光刻胶保护", "FOX is protected by resist"), ("运气", "Luck"), ("场氧是金属", "FOX is metal")], 0,
             "湿法刻蚀的选择比可达几十比一。", "Wet etches can have selectivities of tens to one.")),
@@ -543,11 +225,11 @@ STEPS: List[Step] = [
           "Cox = εox/tox, strongly affecting threshold voltage and drive current."),
          [("温度", "Temperature", lambda c: "900 °C, 干氧 / dry O2"),
           ("tox", "tox", lambda c: f"{c.p.tox_nm:.1f} nm"),
-          ("Cox", "Cox", lambda c: f"{summarize_cached(c.p).cox * 1e7:.2f} fF/µm²"),
-          ("→ Vtn / Vtp", "→ Vtn / Vtp", lambda c: f"{_vt(c, 'n')} / {_vt(c, 'p')}")],
+          ("Cox", "Cox", lambda c: f"{summarize_cached(c.p, c.features).cox * 1e7:.2f} fF/µm²"),
+          ("→ Vtn / Vtp", "→ Vtn / Vtp", lambda c: f"{vt_text(c, 'n')} / {vt_text(c, 'p')}")],
          [Phase("干氧生长栅氧", "Dry oxidation of gate oxide", 1.6,
-                [deposit("gox", "gate_ox", thickness=0.05, region=_actives), glow((1.0, 0.5, 0.2))])],
-         _q("栅氧变薄（其他不变），NMOS 驱动电流会？", "Thinner gate oxide (all else equal) makes NMOS drive current…",
+                [deposit("gox", "gate_ox", thickness=0.05, region=actives), anneal(900, 1200, (1.0, 0.5, 0.2))])],
+         quiz("栅氧变薄（其他不变），NMOS 驱动电流会？", "Thinner gate oxide (all else equal) makes NMOS drive current…",
             [("增大", "Increase"), ("减小", "Decrease"), ("不变", "Unchanged"), ("先减后增", "Decrease then increase")], 0,
             "Cox 增大 → k' = µCox 增大且 Vt 降低，电流增大。",
             "Larger Cox raises k' = µCox and lowers Vt, so current increases.")),
@@ -560,7 +242,7 @@ STEPS: List[Step] = [
           ("厚度", "Thickness", lambda c: "≈ 300 nm")],
          [Phase("LPCVD 多晶硅", "LPCVD polysilicon", 1.6,
                 [deposit("poly", "poly", thickness=0.35, particles=("depo", (0.9, 0.55, 0.4, 1)))])],
-         _q("现代 CMOS 用多晶硅而非铝做栅，关键原因是？", "Key reason poly replaced Al as the gate?",
+         quiz("现代 CMOS 用多晶硅而非铝做栅，关键原因是？", "Key reason poly replaced Al as the gate?",
             [("更便宜", "Cheaper"), ("耐高温，可实现源漏自对准", "Withstands high temp → self-aligned S/D"),
              ("电阻更低", "Lower resistance"), ("颜色好看", "Looks nicer")], 1,
             "多晶硅能承受源漏注入后的高温退火，栅本身就是注入掩膜，实现自对准。",
@@ -574,8 +256,8 @@ STEPS: List[Step] = [
          [("掩膜", "Mask", lambda c: "#3 POLY"),
           ("栅长 L", "Gate length L", lambda c: f"{c.p.l_um:.2f} µm"),
           ("宽度 Wn / Wp", "Wn / Wp", lambda c: f"{c.p.wn_um:.1f} / {c.p.wp_um:.1f} µm")],
-         _litho(_gates),
-         _q("为什么 PMOS 的 W 通常比 NMOS 大？", "Why is PMOS W usually larger than NMOS W?",
+         litho(gates, mask="POLY"),
+         quiz("为什么 PMOS 的 W 通常比 NMOS 大？", "Why is PMOS W usually larger than NMOS W?",
             [("空穴迁移率低", "Hole mobility is lower"), ("PMOS 更容易制造", "PMOS is easier to make"),
              ("美观", "Aesthetics"), ("N 阱更大", "The n-well is larger")], 0,
             "µp 约为 µn 的 1/2~1/3，加大 Wp 使上拉、下拉电流平衡，VM≈VDD/2。",
@@ -588,10 +270,10 @@ STEPS: List[Step] = [
           "oxide remains only under the gates. The resist is then stripped."),
          [("刻蚀", "Etch", lambda c: "RIE, Cl2/HBr"),
           ("选择比 poly:SiO2", "Selectivity poly:SiO2", lambda c: "> 50:1")],
-         [Phase("刻蚀多晶硅", "Etch polysilicon", 1.8, [pattern("poly", _gates)]),
-          Phase("去除暴露的栅氧", "Remove exposed gate oxide", 1.0, [pattern("gox", _gates, particles=False)]),
-          Phase("去除光刻胶", "Strip resist", 1.0, [strip("resist"), _split_gates])],
-         _q("刻蚀多晶硅时为什么需要高 poly:SiO2 选择比？", "Why is high poly:SiO2 selectivity needed?",
+         [Phase("刻蚀多晶硅", "Etch polysilicon", 1.8, [pattern("poly", gates, mask="POLY")]),
+          Phase("去除暴露的栅氧", "Remove exposed gate oxide", 1.0, [pattern("gox", gates, particles=False, mask="POLY")]),
+          Phase("去除光刻胶", "Strip resist", 1.0, [strip("resist"), split_gates])],
+         quiz("刻蚀多晶硅时为什么需要高 poly:SiO2 选择比？", "Why is high poly:SiO2 selectivity needed?",
             [("避免刻穿极薄栅氧伤及硅", "To stop on the very thin gate oxide without damaging Si"),
              ("加快速度", "Faster etch"), ("降低成本", "Lower cost"), ("改变颜色", "Change colour")], 0,
             "栅氧只有几 nm，选择比不够会刻穿到硅衬底。",
@@ -607,12 +289,12 @@ STEPS: List[Step] = [
           ("剂量", "Dose", lambda c: "5e15 cm^-2"),
           ("能量", "Energy", lambda c: "≈ 60 keV"),
           ("掩膜", "Mask", lambda c: "#4 NSELECT")],
-         _litho(lambda c: [c.lay["nwell"]]) + [
+         litho(lambda c: [c.lay["nwell"]], mask="NSELECT") + [
              Phase("砷离子注入 (自对准)", "Arsenic implant (self-aligned)", 2.4,
-                   [implant("nplus", "n_plus", lambda c: _sd_rects(c.lay["act_n"], c.lay["gn"]), -0.3,
-                            (1.0, 0.35, 0.3, 1)), recolor("gate_n", "poly_n")]),
+                   [implant("nplus", "n_plus", lambda c: sd_rects(c.lay["act_n"], gate_span(c, "gn")), -0.3,
+                            (1.0, 0.35, 0.3, 1), species="As", dose=5e15, energy_kev=60), recolor("gate_n", "poly_n")]),
              Phase("去除光刻胶", "Strip resist", 1.0, [strip("resist")])],
-         _q("源漏“自对准”指的是？", "What does 'self-aligned' source/drain mean?",
+         quiz("源漏“自对准”指的是？", "What does 'self-aligned' source/drain mean?",
             [("用栅极本身作注入掩膜", "The gate itself masks the implant"),
              ("机器自动对准", "The stepper aligns automatically"), ("不需要退火", "No anneal needed"),
              ("源漏用同一掩膜", "S and D share a mask")], 0,
@@ -629,12 +311,12 @@ STEPS: List[Step] = [
           ("剂量", "Dose", lambda c: "3e15 cm^-2"),
           ("能量", "Energy", lambda c: "≈ 40 keV"),
           ("掩膜", "Mask", lambda c: "#5 PSELECT")],
-         _litho(lambda c: [c.lay["pside"]]) + [
+         litho(lambda c: [c.lay["pside"]], mask="PSELECT") + [
              Phase("硼离子注入 (自对准)", "Boron implant (self-aligned)", 2.4,
-                   [implant("pplus", "p_plus", lambda c: _sd_rects(c.lay["act_p"], c.lay["gp"]), -0.3,
-                            (0.4, 0.6, 1.0, 1)), recolor("gate_p", "poly_p")]),
+                   [implant("pplus", "p_plus", lambda c: sd_rects(c.lay["act_p"], gate_span(c, "gp")), -0.3,
+                            (0.4, 0.6, 1.0, 1), species="BF2", dose=3e15, energy_kev=40), recolor("gate_p", "poly_p")]),
              Phase("去除光刻胶", "Strip resist", 1.0, [strip("resist")])],
-         _q("PMOS 的源漏是什么类型掺杂？", "What doping type are PMOS source/drain?",
+         quiz("PMOS 的源漏是什么类型掺杂？", "What doping type are PMOS source/drain?",
             [("N+", "n+"), ("P+", "p+"), ("本征", "Intrinsic"), ("与衬底相同", "Same as substrate")], 1,
             "PMOS 在 N 阱中，源漏是 P+，沟道反型层为空穴。",
             "PMOS sits in the n-well with p+ S/D; its inversion layer is made of holes.")),
@@ -647,10 +329,12 @@ STEPS: List[Step] = [
          [("方法", "Method", lambda c: "RTA 1000 °C, 10 s"),
           ("结深 xj", "Junction depth xj", lambda c: "≈ 0.2 µm")],
          [Phase("快速热退火：激活 + 侧向扩散", "RTA: activation + lateral diffusion", 2.0,
-                [_replace("nplus", "n_plus", lambda c: _sd_annealed(c.lay["act_n"], c.lay["gn"])),
-                 _replace("pplus", "p_plus", lambda c: _sd_annealed(c.lay["act_p"], c.lay["gp"])),
-                 glow((1.0, 0.35, 0.1))])],
-         _q("为什么源漏退火要用“快速”热退火？", "Why use a *rapid* thermal anneal for S/D?",
+                [replace_layer("nplus", "n_plus", lambda c: sd_annealed(c.lay["act_n"], gate_span(c, "gn")),
+                               requires="nplus"),
+                 replace_layer("pplus", "p_plus", lambda c: sd_annealed(c.lay["act_p"], gate_span(c, "gp")),
+                               requires="pplus"),
+                 anneal(1000, 10, (1.0, 0.35, 0.1))])],
+         quiz("为什么源漏退火要用“快速”热退火？", "Why use a *rapid* thermal anneal for S/D?",
             [("激活杂质同时限制扩散，保持浅结", "Activate dopants while limiting diffusion (shallow junctions)"),
              ("省电", "Save power"), ("去除光刻胶", "Remove resist"), ("长氧化层", "Grow oxide")], 0,
             "热预算越小，结越浅，短沟道效应越弱。",
@@ -665,7 +349,7 @@ STEPS: List[Step] = [
           ("回流", "Reflow", lambda c: "850 °C")],
          [Phase("CVD 淀积 + 回流平坦化", "CVD + reflow planarisation", 1.8,
                 [deposit("ild", "ild", top=1.3, particles=("depo", (0.95, 0.95, 0.8, 1)))])],
-         _q("BPSG 中掺硼、磷的主要目的？", "Why add boron and phosphorus to the glass (BPSG)?",
+         quiz("BPSG 中掺硼、磷的主要目的？", "Why add boron and phosphorus to the glass (BPSG)?",
             [("降低回流温度，便于平坦化", "Lower the reflow temperature for planarisation"),
              ("提高导电性", "Increase conductivity"), ("改变颜色", "Change colour"), ("作为源漏", "Act as S/D")], 0,
             "B、P 降低玻璃软化点，低温即可回流填平台阶（P 还能吸除钠离子）。",
@@ -678,11 +362,11 @@ STEPS: List[Step] = [
          [("掩膜", "Mask", lambda c: "#6 CONTACT"),
           ("刻蚀", "Etch", lambda c: "RIE, CHF3/CF4"),
           ("孔数", "Contacts", lambda c: f"{len(c.lay['contacts'])}")],
-         _litho(lambda c: rect_complement(DOMAIN, _contacts(c))) + [
+         litho(lambda c: rect_complement(DOMAIN, contacts(c)), mask="CONTACT") + [
              Phase("刻蚀接触孔", "Etch contact holes", 1.6,
-                   [pattern("ild", lambda c: rect_complement(DOMAIN, _contacts(c)))]),
+                   [pattern("ild", lambda c: rect_complement(DOMAIN, contacts(c)), mask="CONTACT")]),
              Phase("去除光刻胶", "Strip resist", 1.0, [strip("resist")])],
-         _q("接触孔刻蚀应停在哪里？", "Where should the contact etch stop?",
+         quiz("接触孔刻蚀应停在哪里？", "Where should the contact etch stop?",
             [("硅/多晶硅表面", "On the silicon / poly surface"), ("衬底底部", "Bottom of the wafer"),
              ("光刻胶中", "Inside the resist"), ("场氧中", "Inside the field oxide")], 0,
             "需要刚好露出源漏硅和栅多晶硅，过刻会损伤浅结。",
@@ -697,7 +381,7 @@ STEPS: List[Step] = [
           ("厚度", "Thickness", lambda c: "≈ 0.6 µm")],
          [Phase("溅射铝", "Sputter aluminium", 1.8,
                 [deposit("metal", "metal", top=1.65, particles=("depo", (0.85, 0.87, 0.9, 1)))])],
-         _q("铝中加入少量硅的目的？", "Why add a little Si to the aluminium?",
+         quiz("铝中加入少量硅的目的？", "Why add a little Si to the aluminium?",
             [("防止铝穿刺浅结 (spiking)", "Prevent Al spiking into shallow junctions"),
              ("提高亮度", "Make it shinier"), ("降低熔点", "Lower its melting point"), ("增加电阻", "Raise resistance")], 0,
             "Si 在 Al 中有溶解度，预先饱和可防止 Al 吞噬衬底硅造成结短路。",
@@ -710,10 +394,10 @@ STEPS: List[Step] = [
           "PMOS source, both drains tied as Vout, both gates tied as Vin: a CMOS inverter."),
          [("掩膜", "Mask", lambda c: "#7 METAL1"),
           ("刻蚀", "Etch", lambda c: "RIE, Cl2/BCl3")],
-         _litho(_metal) + [
-             Phase("刻蚀铝", "Etch aluminium", 1.8, [pattern("metal", _metal)]),
+         litho(metal, mask="METAL1") + [
+             Phase("刻蚀铝", "Etch aluminium", 1.8, [pattern("metal", metal, mask="METAL1")]),
              Phase("去除光刻胶", "Strip resist", 1.0, [strip("resist")])],
-         _q("这个反相器中，NMOS 的源极接到？", "In this inverter, the NMOS source connects to…",
+         quiz("这个反相器中，NMOS 的源极接到？", "In this inverter, the NMOS source connects to…",
             [("VDD", "VDD"), ("GND", "GND"), ("Vout", "Vout"), ("Vin", "Vin")], 1,
             "NMOS 做下拉，源接 GND；PMOS 做上拉，源接 VDD。",
             "NMOS pulls down (source at GND); PMOS pulls up (source at VDD)."),
@@ -725,37 +409,18 @@ STEPS: List[Step] = [
           "Front-end devices and metal 1 are done (alloy anneal, well/substrate taps, more metal "
           "and passivation are omitted). Open the 'Characteristics' tab and drag Vin: low Vin "
           "turns the PMOS on (Vout high), high Vin turns the NMOS on (Vout low)."),
-         [("Vtn / Vtp", "Vtn / Vtp", lambda c: f"{_vt(c, 'n')} / {_vt(c, 'p')}"),
-          ("VM", "VM", lambda c: f"{summarize_cached(c.p).vtc.vm:.3f} V"),
+         [("Vtn / Vtp", "Vtn / Vtp", lambda c: f"{vt_text(c, 'n')} / {vt_text(c, 'p')}"),
+          ("VM", "VM", lambda c: f"{summarize_cached(c.p, c.features).vtc.vm:.3f} V"),
           ("tpHL / tpLH", "tpHL / tpLH",
-           lambda c: f"{summarize_cached(c.p).tran.tphl * 1e12:.1f} / {summarize_cached(c.p).tran.tplh * 1e12:.1f} ps")],
+           lambda c: f"{summarize_cached(c.p, c.features).tran.tphl * 1e12:.1f} / {summarize_cached(c.p, c.features).tran.tplh * 1e12:.1f} ps")],
          [Phase("合金退火 (H2/N2 425°C)", "Forming-gas alloy anneal", 1.2, [glow((0.9, 0.9, 0.5))])],
-         _q("CMOS 反相器静态功耗很低的原因？", "Why is CMOS inverter static power so low?",
+         quiz("CMOS 反相器静态功耗很低的原因？", "Why is CMOS inverter static power so low?",
             [("稳态时总有一个管子截止，无直流通路", "In steady state one transistor is off: no DC path"),
              ("电压很低", "Very low voltage"), ("用了铝", "Aluminium wiring"), ("场氧很厚", "Thick field oxide")], 0,
             "输出稳定时上拉/下拉中总有一个关断，只有微小的漏电流。",
             "With the output settled, either pull-up or pull-down is off; only leakage flows.")),
 ]
 
-
-# --------------------------------------------------------------------------
-# Building state
-# --------------------------------------------------------------------------
-
-def run_phase(w: Wafer, ctx: Ctx, phase: Phase) -> PhaseAnim:
-    anim = PhaseAnim()
-    for act in phase.actions:
-        act(w, ctx, anim)
-    return anim
-
-
-def build_until(ctx: Ctx, step_index: int) -> Wafer:
-    """Wafer state after completing steps[0..step_index] (inclusive)."""
-    w = Wafer()
-    for st in STEPS[: step_index + 1]:
-        for ph in st.phases:
-            run_phase(w, ctx, ph)
-    return w
 
 
 # 3D label anchors: (layer, zh, en, x, z)
@@ -770,5 +435,17 @@ REGION_LABELS = [
 ]
 
 TERMINAL_LABELS = [
-    ("GND", 3.35, 1.0), ("Vout", 10.25, 3.5), ("VDD", 17.15, 1.0), ("Vin", 10.25, 7.1),
+    ("GND", 3.35, 1.0), ("Vout", 10.25, 3.5), ("VDD", 17.15, 1.0), ("Vin", 12.8, 7.1),
 ]
+
+
+FLOW = Flow(
+    key="locos",
+    name=("经典 LOCOS 工艺", "Classic LOCOS"),
+    node=("约 1.0 µm 代：LOCOS 隔离 + 单 N 阱",
+          "~1.0 µm era: LOCOS + single n-well"),
+    steps=STEPS,
+    features=frozenset({"locos"}),
+    region_labels=REGION_LABELS,
+    terminal_labels=TERMINAL_LABELS,
+)

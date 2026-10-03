@@ -68,8 +68,8 @@ class PlotRenderer:
         return np.ascontiguousarray(buf[::-1])     # Panda textures start at bottom row
 
     # ------------------------------------------------------------------ charts
-    def idvg(self, p: ProcessParams, vin: float):
-        mn, mp = nmos(p), pmos(p)
+    def idvg(self, p: ProcessParams, vin: float, f=frozenset()):
+        mn, mp = nmos(p, f), pmos(p, f)
         v = np.linspace(0, p.vdd, 200)
         ax = self._ax(i18n.pick("转移特性 |Id|-|Vgs|  (|Vds| = VDD)", "Transfer |Id| vs |Vgs|  (|Vds| = VDD)"),
                       "|Vgs| (V)", "|Id| (A)")
@@ -86,14 +86,14 @@ class PlotRenderer:
         self._legend(ax, "lower right")
         return self._finish()
 
-    def idvd(self, p: ProcessParams, vin: float):
-        mn, mp = nmos(p), pmos(p)
+    def idvd(self, p: ProcessParams, vin: float, f=frozenset()):
+        mn, mp = nmos(p, f), pmos(p, f)
         vd = np.linspace(0, p.vdd, 160)
         ax = self._ax(i18n.pick("输出特性 Id-Vds (NMOS 第一象限 / PMOS 第三象限)",
                                 "Output Id-Vds (NMOS Q1 / PMOS Q3)"), "Vds (V)", "Id (mA)")
         levels = [0.4, 0.6, 0.8, 1.0]
-        for i, f in enumerate(levels):
-            vg = f * p.vdd
+        for i, frac in enumerate(levels):
+            vg = frac * p.vdd
             lab_n = "NMOS" if i == len(levels) - 1 else None
             lab_p = "PMOS" if i == len(levels) - 1 else None
             ax.plot(vd, mn.ids(vg, vd) * 1e3, color=C_N, lw=1.2, alpha=0.45 + 0.15 * i, label=lab_n)
@@ -102,7 +102,7 @@ class PlotRenderer:
         # curves at the current input bias
         ax.plot(vd, mn.ids(vin, vd) * 1e3, color=C_N, lw=2.2)
         ax.plot(-vd, -mp.ids(p.vdd - vin, vd) * 1e3, color=C_P, lw=2.2)
-        vout = float(inverter_vout(p, vin)[0])
+        vout = float(inverter_vout(p, vin, features=f)[0])
         i_op = float(mn.ids(vin, vout))
         ax.plot([vout], [i_op * 1e3], "o", ms=8, color=C_N, mec=SURFACE, mew=2)
         ax.plot([vout - p.vdd], [-i_op * 1e3], "o", ms=8, color=C_P, mec=SURFACE, mew=2)
@@ -112,7 +112,7 @@ class PlotRenderer:
         self._legend(ax, "upper left")
         return self._finish()
 
-    def vtc(self, p: ProcessParams, vin: float, s):
+    def vtc(self, p: ProcessParams, vin: float, s, f=frozenset()):
         r = s.vtc
         ax = self._ax(i18n.pick("反相器电压传输特性 VTC", "Inverter voltage transfer characteristic"),
                       "Vin (V)", "Vout (V)")
@@ -121,7 +121,7 @@ class PlotRenderer:
         for x, name in ((r.vil, "VIL"), (r.vm, "VM"), (r.vih, "VIH")):
             ax.axvline(x, color=C_MUTED, lw=0.8, ls=":")
             ax.text(x, p.vdd * 1.03, f"{name}\n{x:.2f}", color=TEXT2, fontsize=9.5, ha="center", va="bottom")
-        vout = float(inverter_vout(p, vin)[0])
+        vout = float(inverter_vout(p, vin, features=f)[0])
         ax.plot([vin], [vout], "o", ms=9, color=C_P, mec=SURFACE, mew=2, label=i18n.pick("工作点", "Operating point"))
         ax.text(0.02, 0.04,
                 f"NMH = {r.nmh:.2f} V   NML = {r.nml:.2f} V\n"
