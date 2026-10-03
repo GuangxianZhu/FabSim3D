@@ -571,7 +571,7 @@ def summarize_cached(p: ProcessParams, features: FrozenSet[str] = frozenset()):
 def nwe_text(c: Ctx) -> str:
     """NMOS narrow-width Vt shift caused by the flow's isolation scheme."""
     s = summarize_cached(c.p, c.features)
-    base = summarize_cached(c.p, frozenset())
+    base = summarize_cached(c.p, frozenset(c.features) - {"locos", "sti"})   # same, minus isolation
     return f"{(s.vtn - base.vtn) * 1e3:+.0f} mV  (Wn = {c.p.wn_um:.1f} µm)"
 
 

@@ -9,6 +9,8 @@
 
 ![LDD + 侧墙与 Vt-L 曲线](docs/screenshot_ldd_vtl.png)
 
+![讲解模式：实验课②](docs/screenshot_guide_lesson2.png)
+
 ## 运行
 
 ```bash
@@ -16,6 +18,7 @@ pip install -r requirements.txt
 python main.py              # 中文界面
 python main.py --lang en    # English UI
 python main.py --flow sti   # 直接打开 STI + CMP 工艺
+python main.py --lesson 1   # 讲解模式，直接进入实验课①
 python main.py --size 1920x1080 --fullscreen
 ```
 
@@ -37,6 +40,27 @@ Noto CJK/文泉驿 (Linux)；也可以把任意 `.ttf/.otf/.ttc` 放进 `fonts/`
 电子（青色）和空穴（橙色）按电流大小流动，终端标签显示实时电压。点“播放瞬态”会用瞬态仿真结果驱动动画。
 
 **测验模式**：每完成一步弹出一道选择题，附带解析，左栏显示得分。
+
+## 讲解模式（动手实验课）
+
+左栏打开“讲解模式”后：
+
+- 右栏多出“讲解”页，里面有 4 门实验课。每门课由 4～6 个小任务组成，每个任务分三段：
+  1. **原理**：先用比喻讲直觉（比如把 MOS 管比作水龙头、把反相器比作拔河），可以展开“深入一点”看公式；
+  2. **试一试**：给出一个具体操作，需要用的滑块或按钮就在卡片里，并且会闪烁提示；
+  3. **看到了什么**：系统自动检测任务是否完成，完成后打勾，用操作前后的真实数值解释变化。曲线图上会保留一条灰色的“操作前”曲线作对比。
+- 不会操作时，可以点“帮我操作”让系统演示。
+- “工艺说明”页的每一步会多出一段绿色的**小贴士**，解释这一步为什么要做。
+
+| 实验课 | 内容 |
+|---|---|
+| ① MOS 管怎么开关 | 拖 Vin 看沟道出现、阈值电压、亚阈值漏电、CMOS 为什么省电、开关瞬间的充放电（3D 载流子仿真） |
+| ② 工艺参数怎么决定 Vt | 减薄栅氧、提高掺杂、用 N 阱剂量匹配 PMOS、Vt 太低导致漏电 |
+| ③ 反相器与宽长比 | Wp=Wn 时翻转点偏移、把 VM 调到 VDD/2、负载电容与延迟、降压与 CL·VDD² 能耗 |
+| ④ 缩小尺寸的代价 | 长/短沟道对比、Vt roll-off 与 DIBL、LDD 的作用、提高掺杂和减薄栅氧两种补救 |
+
+课程数据在 `fabsim3d/lessons/`（`content.py` 写课程，`tips.py` 写步骤小贴士，`engine.py` 负责检测）。
+新增一个任务只需要写 `explain` / `try_` / `check(开始状态, 当前状态)` / `observe(开始状态, 结束状态)` / `demo`。
 
 ## 工艺流程
 
@@ -90,6 +114,8 @@ CMP 抛光垫贴着表面边磨边下降。
 ```
 main.py                       入口 (命令行参数, 无界面截图)
 fabsim3d/app.py               Panda3D 应用：三栏 UI、相机、步骤控制、测验、电学面板
+fabsim3d/guide_ui.py          讲解模式界面：课程列表、任务卡片、内嵌控件、闪烁提示、小贴士
+fabsim3d/lessons/             实验课内容、步骤小贴士、任务检测引擎 (纯 Python)
 fabsim3d/scene.py             晶圆渲染、动画、粒子、CMP 抛光垫、剖面、3D 标注、载流子
 fabsim3d/process_core.py      工艺引擎：晶圆状态、动作、Flow/Step/Phase、故障钩子、掺杂记录
 fabsim3d/flows/__init__.py    工艺代注册表 FLOWS
@@ -119,7 +145,7 @@ fabsim3d/i18n.py              中英文字符串
 
 ```bash
 pip install pytest
-python -m pytest -q        # 模型(含短沟道效应) + 两套工艺几何 + 故障/记录接口 + 离屏 GUI 冒烟测试
+python -m pytest -q        # 模型 + 两套工艺 + 故障/记录接口 + 每门课每个任务可完成 + 离屏 GUI 冒烟测试
 ```
 
 无界面截图（文档和调试用）：

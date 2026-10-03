@@ -64,3 +64,30 @@ def test_params_lang_quiz(app):
     assert app.quiz_frame is None
     app.prev_step()
     assert app.step == 12
+
+
+def test_guide_mode_runs_every_lesson(app):
+    from fabsim3d.lessons import LESSONS
+    app.guide_mode = False
+    app.toggle_guide()
+    assert app.right_tab == "guide" and "guide" in app.tab_btns
+    for lesson in LESSONS:
+        app.start_lesson(lesson)
+        assert app.flow.key == lesson.flow and app.is_done()
+        app.guide_ack()                       # intro card
+        for _ in range(len(lesson.tasks) - 1):
+            app.guide_demo()
+            run(app, 0.3, speed=4.0)
+            assert app.runner.done[app.runner.idx], (lesson.key, app.runner.idx)
+            app._redraw_plot()                # with the grey reference curve
+            app.guide_next()
+        assert app.runner.finished
+        assert lesson.key in app.lessons_done
+    app._toggle_lang()
+    app._toggle_lang()
+    app.stop_lesson()
+    app.goto(3)
+    app._set_tab("process")
+    assert app.tip_frame.getChildren().getNumPaths() > 0     # step tip visible in guide mode
+    app.toggle_guide()
+    assert app.right_tab == "process" and "guide" not in app.tab_btns

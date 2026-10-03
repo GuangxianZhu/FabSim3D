@@ -197,8 +197,9 @@ def short_channel_effect(p: ProcessParams, m: Mosfet, features: FrozenSet[str]) 
 
     * Vt roll-off (Yau charge sharing):
         d|Vt| = -(Qdep/Cox) * (xj/L) * (sqrt(1 + 2*xdm/xj) - 1)
-    * DIBL: |Vt| drops by sigma*|Vds|,  sigma = 0.6 * exp(-L / (2*l)),
-      characteristic length l = sqrt(eps_si/eps_ox * tox * xj)
+    * DIBL: |Vt| drops by sigma*|Vds|,  sigma = exp(-L / (2*l)),
+      natural length l = sqrt(eps_si/eps_ox * tox * sqrt(xj * xdm))
+      (thinner oxide, shallower junctions and heavier doping all shorten l)
     * Velocity saturation: Id / (1 + Vds_eff/(Ec*L)),  Ec = 2*vsat/mu
     """
     if "sce" not in features:
@@ -208,8 +209,8 @@ def short_channel_effect(p: ProcessParams, m: Mosfet, features: FrozenSet[str]) 
     qdep_cox = m.gamma * math.sqrt(2 * m.phi_f)
     xdm = _xdm_cm(m)
     rolloff = qdep_cox * (xj / L) * (math.sqrt(1 + 2 * xdm / xj) - 1)
-    l_char = math.sqrt(EPS_SI / EPS_OX * p.tox_nm * 1e-7 * xj)
-    sigma = 0.6 * math.exp(-L / (2 * l_char))
+    l_char = math.sqrt(EPS_SI / EPS_OX * p.tox_nm * 1e-7 * math.sqrt(xj * xdm))
+    sigma = math.exp(-L / (2 * l_char))
     mu = p.mu_n if m.polarity == "n" else p.mu_p
     vsat = p.vsat_n if m.polarity == "n" else p.vsat_p
     ec_l = 2 * vsat / mu * L

@@ -22,6 +22,7 @@ from .materials import MATERIALS, mat
 from .plots import PlotRenderer, setup_fonts
 from .flows import DEFAULT_FLOW, FLOWS
 from .process_core import Wafer, build_until, is_skipped, make_ctx, run_phase, sci, summarize_cached
+from .guide_ui import GuideMixin
 from .scene import WaferScene
 
 # ---------------------------------------------------------------- style
@@ -35,6 +36,8 @@ TXT = (0.93, 0.93, 0.93, 1)
 TXT2 = (0.70, 0.71, 0.74, 1)
 ACCENT = (1.0, 0.82, 0.35, 1)
 DONE_COL = (0.15, 0.30, 0.22, 1)
+
+NO_LINE_START = set("，。、；：！？）》」』”’,.;:!?)%")   # never begin a wrapped line with these
 
 LEFT_W = 0.74
 RIGHT_W = 0.94
@@ -53,7 +56,7 @@ PARAM_SLIDERS = [
 ]
 
 
-class CmosApp(ShowBase):
+class CmosApp(GuideMixin, ShowBase):
     def __init__(self, opts=None):
         ShowBase.__init__(self)
         self.opts = opts or {}
@@ -115,6 +118,7 @@ class CmosApp(ShowBase):
         self.plot_tex = Texture("plot")
         self.plot_tex.setup2dTexture(PLOT_W, PLOT_H, Texture.TUnsignedByte, Texture.FRgba8)
 
+        self._guide_init()
         self.cut_on = True
         self.cut_y = 3.5
         self.scene.cut_y = self.cut_y
@@ -356,8 +360,9 @@ class CmosApp(ShowBase):
             self._advance_transient(dt)
         if self.params_dirty and now - self.last_plot > 0.15:
             self._commit_params()
-        if self.plot_dirty and self.right_tab == "elec" and now - self.last_plot > 0.12:
+        if self.plot_dirty and self.right_tab in ("elec", "guide") and now - self.last_plot > 0.12:
             self._redraw_plot()
+        self._guide_tick()
         return task.cont
 
     # ================================================================= electrical
@@ -401,6 +406,7 @@ class CmosApp(ShowBase):
         self.plot_dirty = True
 
     def play_transient(self):
+        self.lab_tran = True
         self.tran_t = 0.0
         self.tran_cursor = 0.0
         self.plot_kind = "tran"
@@ -421,16 +427,17 @@ class CmosApp(ShowBase):
         p = self.params
         s = summarize_cached(p, self.flow.features)
         vin = min(self.vin, p.vdd)
+        ref = self.guide_ref
         if self.plot_kind == "idvg":
-            img = self.renderer.idvg(p, vin, self.flow.features)
+            img = self.renderer.idvg(p, vin, self.flow.features, ref)
         elif self.plot_kind == "idvd":
-            img = self.renderer.idvd(p, vin, self.flow.features)
+            img = self.renderer.idvd(p, vin, self.flow.features, ref)
         elif self.plot_kind == "vtl":
-            img = self.renderer.vtl(p, self.flow.features)
+            img = self.renderer.vtl(p, self.flow.features, ref)
         elif self.plot_kind == "tran":
-            img = self.renderer.tran(p, s, self.tran_cursor if self.tran_t is not None else None)
+            img = self.renderer.tran(p, s, self.tran_cursor if self.tran_t is not None else None, ref)
         else:
-            img = self.renderer.vtc(p, vin, s, self.flow.features)
+            img = self.renderer.vtc(p, vin, s, self.flow.features, ref)
         self.plot_tex.setRamImageAs(img.tobytes(), "RGBA")
         self.plot_dirty = False
         self.last_plot = time.time()
@@ -544,13 +551,13 @@ class CmosApp(ShowBase):
                 self._measure.setFont(self.font)
         tokens = re.findall(r"[A-Za-z0-9_.,;:!?%()'\"<>/+\-=~°µ^]+|\s|.", text)
         lines, cur = [], ""
-        limit = width / scale
+        limit = width / scale - 1.0      # keep one em for hanging punctuation
         for tok in tokens:
             if tok == "\n":
                 lines.append(cur)
                 cur = ""
                 continue
-            if cur and self._measure.calcWidth(cur + tok) > limit:
+            if cur and self._measure.calcWidth(cur + tok) > limit and tok not in NO_LINE_START:
                 lines.append(cur.rstrip())
                 cur = "" if tok.isspace() else tok
             else:
@@ -648,9 +655,11 @@ class CmosApp(ShowBase):
         for k, (key, xx) in enumerate((("cam_iso", 0.14), ("cam_front", 0.37), ("cam_top", 0.60))):
             self._button(f, tr(key), (xx, y), 0.22, lambda key=key: self.set_cam(key[4:]))
         y -= 0.085
-        self.quiz_btn = self._button(f, tr("quiz_mode"), (0.20, y), 0.34, self._toggle_quiz,
+        self.guide_btn = self._button(f, tr("guide_mode"), (0.20, y), 0.34, self.toggle_guide,
+                                      on=self.guide_mode)
+        self.quiz_btn = self._button(f, tr("quiz_mode"), (0.55, y), 0.34, self._toggle_quiz,
                                      on=self.quiz_enabled)
-        self.score_text = self._text(f, "", (0.40, y - 0.01), 0.03, TXT2)
+        self.score_text = self._text(f, "", (0.40, y - 0.075), 0.03, TXT2)
         self._text(f, tr("mouse_hint"), (0.03, -1.93), 0.026, TXT2, wrap=LEFT_W - 0.06)
 
     def _build_right(self):
@@ -658,12 +667,14 @@ class CmosApp(ShowBase):
         self.ui_roots.append(f)
         x0 = -RIGHT_W + 0.03
         self.tab_btns = {}
-        for k, key in enumerate(("process", "elec", "params")):
-            tw = (RIGHT_W - 0.08) / 3
+        tabs = ("process", "elec", "params") + (("guide",) if self.guide_mode else ())
+        names = {"process": "tab_process", "elec": "tab_elec", "params": "tab_params", "guide": "tab_guide"}
+        tw = (RIGHT_W - 0.06 - 0.01 * (len(tabs) - 1)) / len(tabs)
+        for k, key in enumerate(tabs):
             self.tab_btns[key] = self._button(
-                f, tr({"process": "tab_process", "elec": "tab_elec", "params": "tab_params"}[key]),
-                (x0 + tw / 2 + k * (tw + 0.01), -0.065), tw, lambda key=key: self._set_tab(key),
-                on=self.right_tab == key, scale=0.034)
+                f, tr(names[key]), (x0 + tw / 2 + k * (tw + 0.01), -0.065), tw,
+                lambda key=key: self._set_tab(key), on=self.right_tab == key,
+                scale=0.034 if len(tabs) == 3 else 0.031)
 
         # ---- process tab
         pt = DirectFrame(parent=f, frameColor=(0, 0, 0, 0))
@@ -672,6 +683,7 @@ class CmosApp(ShowBase):
         self.title_text = self._text(pt, "", (x0, -0.225), 0.048, TXT)
         self.caption_text = self._text(pt, "", (x0, -0.285), 0.032, ACCENT)
         self.desc_text = self._text(pt, "", (x0, -0.35), 0.031, TXT)
+        self.tip_frame = DirectFrame(parent=pt, frameColor=(0, 0, 0, 0))
         self.params_frame = DirectFrame(parent=pt, frameColor=(0, 0, 0, 0))
         self.legend_frame = DirectFrame(parent=pt, frameColor=(0, 0, 0, 0))
 
@@ -728,10 +740,15 @@ class CmosApp(ShowBase):
         self.extract_text = self._text(pa, "", (x0, y - 0.055), 0.028, TXT)
         self.extract_text2 = self._text(pa, "", (x0 + RIGHT_W / 2, y - 0.055), 0.028, TXT)
 
+        # ---- guide tab
+        self._build_guide_tab(f)
+
     # ================================================================= UI callbacks
     def _set_tab(self, key):
         self.right_tab = key
         self.plot_dirty = True
+        if key in ("params", "elec"):
+            self._sync_controls()
         self.refresh_ui()
 
     def _set_plot(self, kind):
@@ -817,6 +834,7 @@ class CmosApp(ShowBase):
         self._set_on(self.edge_btn, self.scene.edges)
         self._set_on(self.label_btn, self.scene.show_labels)
         self._set_on(self.quiz_btn, self.quiz_enabled)
+        self._set_on(self.guide_btn, self.guide_mode)
         self._set_on(self.sim_btn, self.sim3d)
         n_ok = sum(1 for v in self.quiz_results.values() if v)
         self.score_text.setText(tr("score", ok=n_ok, n=len(self.quiz_results)) if self.quiz_enabled else "")
@@ -824,6 +842,8 @@ class CmosApp(ShowBase):
         self.tab_process.show() if self.right_tab == "process" else self.tab_process.hide()
         self.tab_elec.show() if self.right_tab == "elec" else self.tab_elec.hide()
         self.tab_params.show() if self.right_tab == "params" else self.tab_params.hide()
+        if self.tab_guide is not None:
+            self.tab_guide.show() if self.right_tab == "guide" else self.tab_guide.hide()
 
         # ---- process tab
         st = self.steps[max(cur, 0)]
@@ -833,6 +853,18 @@ class CmosApp(ShowBase):
         self.desc_text.setText(self.wrap(i18n.pick(*st.desc), RIGHT_W - 0.07, 0.031))
         tn = self.desc_text.textNode
         y = -0.35 - tn.getNumRows() * tn.getLineHeight() * 0.031 - 0.03
+        for c in self.tip_frame.getChildren():
+            c.removeNode()
+        tip = self.step_tip(st)
+        if tip:
+            tt = self._text(self.tip_frame, tr("tip_head") + tip, (-RIGHT_W + 0.05, y - 0.005), 0.028,
+                            (0.75, 0.92, 0.6, 1), wrap=RIGHT_W - 0.1)
+            rows = tt.textNode.getText().count("\n") + 1
+            h = rows * 0.035 + 0.02
+            DirectFrame(parent=self.tip_frame, frameColor=(0.16, 0.22, 0.14, 1),
+                        frameSize=(-RIGHT_W + 0.03, -0.03, y - h + 0.01, y + 0.035))
+            tt.reparentTo(self.tip_frame)
+            y -= h + 0.04
         for c in self.params_frame.getChildren():
             c.removeNode()
         self._text(self.params_frame, tr("params"), (-RIGHT_W + 0.03, y), 0.034, ACCENT)

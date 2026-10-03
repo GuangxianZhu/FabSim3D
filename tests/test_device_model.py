@@ -93,7 +93,7 @@ def test_vt_rolloff_and_dibl_grow_as_l_shrinks():
 
 def test_ldd_reduces_dibl():
     p = ProcessParams(l_um=0.25)
-    assert nmos(p, SCE_LDD).dibl < 0.5 * nmos(p, SCE).dibl
+    assert nmos(p, SCE_LDD).dibl < 0.7 * nmos(p, SCE).dibl
     assert nmos(p, SCE_LDD).vt > nmos(p, SCE).vt
 
 
