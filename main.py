@@ -13,6 +13,8 @@ def parse():
     ap = argparse.ArgumentParser(description="Planar CMOS process 3D teaching demo (Panda3D)")
     ap.add_argument("--lang", choices=["zh", "en"], default="zh")
     ap.add_argument("--flow", default=None, help="process flow: locos (default) | sti")
+    ap.add_argument("--guide", action="store_true", help="start with guide mode on")
+    ap.add_argument("--lesson", type=int, default=None, help="open lesson N (1-4) in guide mode")
     ap.add_argument("--size", default="1600x900", help="window size, e.g. 1920x1080")
     ap.add_argument("--fullscreen", action="store_true")
     # headless screenshot helpers (used for testing / docs)
@@ -72,6 +74,11 @@ def main():
         app.set_cam(a.cam)
     if a.sim:
         app.toggle_sim3d()
+    if a.guide or a.lesson:
+        app.toggle_guide()
+        if a.lesson:
+            from fabsim3d.lessons import LESSONS
+            app.start_lesson(LESSONS[a.lesson - 1])
     if a.quiz and a.step is not None:
         app.show_quiz(a.step)
     app.refresh_ui()

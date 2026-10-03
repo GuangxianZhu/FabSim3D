@@ -71,5 +71,32 @@ STRINGS = {
     "quiz_ok": ("回答正确！", "Correct!"),
     "quiz_bad": ("不对哦，正确答案：{a}", "Not quite. Answer: {a}"),
     "continue": ("继续", "Continue"),
+    "guide_mode": ("讲解模式", "Guide mode"),
+    "tab_guide": ("讲解", "Guide"),
+    "tip_head": ("小贴士：", "Tip: "),
+    "guide_lessons": ("动手实验课", "Hands-on lessons"),
+    "guide_intro": ("每门课由几个小任务组成：先读原理，再按“试一试”的提示拖动滑块或点按钮，"
+                    "完成后系统会自动打勾，并告诉你哪些数值变了、为什么。不会操作时可以点“帮我操作”。"
+                    "开始课程时会自动切到对应工艺，并把参数恢复为默认值。",
+                    "Each lesson is a few small tasks: read the idea, then follow 'Try it' to drag a "
+                    "slider or press a button. The task ticks itself off and explains what changed and "
+                    "why. Stuck? Press 'Do it for me'. Starting a lesson switches to its process flow "
+                    "and resets the parameters."),
+    "guide_tip_note": ("讲解模式下，“工艺说明”页每一步都会多一段绿色的小贴士。",
+                       "In guide mode every step on the Process tab also shows a green tip."),
+    "guide_done_mark": ("[已完成]", "[done]"),
+    "guide_back": ("< 课程列表", "< Lessons"),
+    "guide_task": ("任务 {i}/{n}", "Task {i}/{n}"),
+    "guide_try": ("试一试：", "Try it: "),
+    "guide_deep_on": ("深入一点 (公式)", "Go deeper (math)"),
+    "guide_deep_off": ("收起公式", "Hide math"),
+    "guide_deep_prefix": ("【深入】", "[Deeper] "),
+    "guide_start": ("开始实验 >", "Start >"),
+    "guide_seen": ("我看到了", "Got it"),
+    "guide_demo": ("帮我操作", "Do it for me"),
+    "guide_seen_head": ("看到了什么：", "What happened: "),
+    "guide_prev": ("< 上一个", "< Back"),
+    "guide_next": ("下一个 >", "Next >"),
+    "guide_finished": ("本课完成！回课程列表选下一课", "Lesson complete! Pick the next one"),
     "skip": ("跳过", "Skip"),
 }
