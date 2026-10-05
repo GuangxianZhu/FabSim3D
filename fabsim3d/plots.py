@@ -22,6 +22,7 @@ GRID = "#383835"
 C_N = "#3987e5"     # NMOS / series 1
 C_P = "#d95926"     # PMOS / series 2
 C_MUTED = "#8a8980"
+C_I = "#3fa66b"     # inverter supply current
 C_REF = "#6f6e68"      # grey "before" reference curves
 
 
@@ -150,7 +151,23 @@ class PlotRenderer:
                 transform=ax.transAxes, color=TEXT2, fontsize=10.5)
         ax.set_xlim(0, p.vdd)
         ax.set_ylim(-0.05 * p.vdd, p.vdd * 1.18)
-        self._legend(ax, "center right")
+        # supply current VDD -> GND through both devices (no DC current flows into the gate)
+        ax2 = ax.twinx()
+        i_ma = r.i_short * 1e3
+        ax2.plot(r.vin, i_ma, color=C_I, lw=1.8,
+                 label=i18n.pick("电源电流 IDD (右轴)", "Supply current IDD (right)"))
+        i_op = float(nmos(p, f).ids(vin, vout)) * 1e3
+        ax2.plot([vin], [i_op], "o", ms=7, color=C_I, mec=SURFACE, mew=1.5)
+        ax2.set_ylim(0, float(i_ma.max()) * 2.4)
+        ax2.set_ylabel("IDD (mA)", color=TEXT2, fontsize=11.5)
+        ax2.tick_params(colors=TEXT2, labelsize=10, length=3)
+        for side in ("top", "left", "bottom"):
+            ax2.spines[side].set_visible(False)
+        ax2.spines["right"].set_color(GRID)
+        h1, l1 = ax.get_legend_handles_labels()
+        h2, l2 = ax2.get_legend_handles_labels()
+        ax2.legend(h1 + h2, l1 + l2, loc="upper right", bbox_to_anchor=(1.0, 0.9), fontsize=10, frameon=True,
+                   facecolor=SURFACE, edgecolor=GRID, labelcolor=TEXT2)
         return self._finish()
 
     def tran(self, p: ProcessParams, s, cursor_t: float | None = None, ref=None):
