@@ -540,8 +540,11 @@ class WaferScene:
 
     def _activity(self, key: str) -> float:
         v = self.sim_values or {}
-        cur = max(v.get("i" + key, 0.0), 1e-16)
-        return min(max((math.log10(cur) + 10.5) / 7.5, 0.0), 1.0)
+        cur = max(v.get("i" + key, 0.0), 0.0)
+        iref = v.get("iref")
+        if iref:
+            return min(math.sqrt(cur / iref), 1.0)
+        return min(max((math.log10(max(cur, 1e-16)) + 10.5) / 7.5, 0.0), 1.0)
 
     def _apply_sim_alpha(self):
         v = self.sim_values or {}

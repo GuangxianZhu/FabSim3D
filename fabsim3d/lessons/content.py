@@ -108,11 +108,15 @@ def _l1_tasks():
             check=lambda a, b: b.vin > b.p.vdd - 0.1,
             observe=lambda a, b: (
                 f"Vin = VDD 时 NMOS 全开、PMOS 关断，输出被拉到 {b.vout:.2f} V。看 3D：载流子几乎不动了！"
-                "因为 PMOS 断开，电流没有通路。只有在 Vin 处于中间时两个管子才同时导通（短路电流）。"
+                "因为 PMOS 断开，电流没有通路。只有当 Vtn < Vin < VDD − |Vtp|"
+                f"（约 {b.s.vtn:.2f}~{b.p.vdd + b.s.vtp:.2f} V）时两个管子才同时导通，"
+                "有一股从 VDD 直通到地的短路电流，在 VM 附近最大；输入停在 0 或 VDD 时总是一开一关。"
                 "所以 CMOS 电路静止时几乎不耗电，这是它统治数字芯片的原因。",
                 f"At Vin = VDD the NMOS is fully on and the PMOS off; the output is pulled to "
                 f"{b.vout:.2f} V. In 3D the carriers barely move: with the PMOS off there is no path. "
-                "Only around mid-Vin are both devices on (short-circuit current). That is why idle "
+                f"Both devices conduct only while Vtn < Vin < VDD − |Vtp| (about {b.s.vtn:.2f}–"
+                f"{b.p.vdd + b.s.vtp:.2f} V): then a short-circuit current flows straight from VDD to "
+                "ground, peaking near VM. At a logic level (0 or VDD) one is always off. That is why idle "
                 "CMOS draws almost no power, and why it dominates digital chips."),
             controls=["vin"], demo=lambda s: {"vin": s.p.vdd}, plot="vtc", compare=False),
         Task(
