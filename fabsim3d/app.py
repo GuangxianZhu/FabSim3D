@@ -376,7 +376,10 @@ class CmosApp(GuideMixin, ShowBase):
 
         def sig(x):
             return 1 / (1 + math.exp(-max(min(x, 40), -40)))
-        return {"vin": vin, "vout": vout, "vdd": p.vdd, "gnd": 0.0, "in": idn, "ip": idp,
+        # carrier speed is scaled to the on-current, so leakage and the short-circuit
+        # hump around VM look as small as they really are next to switching current
+        iref = max(mn.idsat(p.vdd), mp.idsat(p.vdd), 1e-12)
+        return {"vin": vin, "vout": vout, "vdd": p.vdd, "gnd": 0.0, "in": idn, "ip": idp, "iref": iref,
                 "inv_n": sig((vin - mn.vt_mag) / 0.08), "inv_p": sig((p.vdd - vin - mp.vt_mag) / 0.08)}
 
     def _apply_sim(self):
