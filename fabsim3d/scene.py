@@ -122,6 +122,13 @@ def build_solids_node(name: str, items: List[Tuple[Solid, tuple]], cut_y: float,
     return np_
 
 
+def _fmt_amp(i: float) -> str:
+    for scale, unit in ((1e-3, "mA"), (1e-6, "µA"), (1e-9, "nA")):
+        if i >= scale:
+            return f"{i / scale:.3g} {unit}"
+    return f"{i / 1e-12:.2g} pA"
+
+
 def _unit_cube() -> NodePath:
     s = Solid.box(-0.5, 0.5, -0.5, 0.5, -0.5, 0.5)
     return build_solids_node("cube", [(s, (1, 1, 1, 1))], -99, False)
@@ -487,6 +494,8 @@ class WaferScene:
                 key = name.lower()
                 if key in vals:
                     text = f"{name} = {vals[key]:.2f} V"
+                    if key == "vdd" and "ip" in vals:
+                        text += f"\nIDD = {_fmt_amp(vals['ip'])}"
                 ly = max(y, self.cut_y + 0.4) if y < 6 else y
                 self._label(text, (x, ly, 2.2), 0.36, fg=(1, 0.95, 0.4, 1), bg=(0.05, 0.05, 0.1, 0.75))
             ln, lp = self.ctx.lay["gnc"], self.ctx.lay["gpc"]
@@ -516,31 +525,49 @@ class WaferScene:
         rnd = random.Random(1)
         y = max(self.cut_y, 2.6) + 0.02 if self.cut_y > 0 else 3.5
         y = min(y, 4.3)
-        # path in (x, z): contact plug -> S/D -> channel -> S/D -> plug
+        ym = y - 0.08                  # carrier plane, just behind the cut
+        zm = 1.55                      # inside metal 1
+        yr = 4.7                       # far end of the GND / VDD rails
+        xo = (7.15 + 13.35) / 2        # Vout node (where the load CL hangs)
+        # (x, y, z) paths.  "n"/"p": carriers inside each transistor, contact plug ->
+        # S/D -> channel -> S/D -> plug.  The rest is electron flow in metal 1, which
+        # closes the loop GND -> NMOS -> Vout -> PMOS -> VDD (conventional current runs
+        # the other way).  The Vout wire is split at the output node: its NMOS half
+        # carries In and its PMOS half Ip, so during a transient only the half that
+        # charges / discharges CL flows.
         paths = {
-            "n": [(3.35, 1.45), (3.35, -0.15), (lay["gn"][0], -0.035), (lay["gn"][1], -0.035),
-                  (7.15, -0.15), (7.15, 1.45)],
-            "p": [(17.15, 1.45), (17.15, -0.15), (lay["gp"][1], -0.035), (lay["gp"][0], -0.035),
-                  (13.35, -0.15), (13.35, 1.45)],
+            "n": [(3.35, ym, 1.45), (3.35, ym, -0.15), (lay["gn"][0], ym, -0.035),
+                  (lay["gn"][1], ym, -0.035), (7.15, ym, -0.15), (7.15, ym, 1.45)],
+            "p": [(17.15, ym, 1.45), (17.15, ym, -0.15), (lay["gp"][1], ym, -0.035),
+                  (lay["gp"][0], ym, -0.035), (13.35, ym, -0.15), (13.35, ym, 1.45)],
+            "gnd": [(3.35, yr, zm), (3.35, ym, zm), (3.35, ym, 1.45)],
+            "on": [(7.15, ym, 1.45), (7.15, ym, zm), (xo, ym, zm)],
+            "op": [(xo, ym, zm), (13.35, ym, zm), (13.35, ym, 1.45)],
+            "vdd": [(17.15, ym, 1.45), (17.15, ym, zm), (17.15, yr, zm)],
         }
-        colors = {"n": (0.35, 1.0, 1.0, 1), "p": (1.0, 0.65, 0.2, 1)}
-        for key in ("n", "p"):
-            pts = paths[key]
+        e_metal = (0.35, 1.0, 1.0, 1)      # electrons, same colour as in the NMOS
+        colors = {"n": (0.35, 1.0, 1.0, 1), "p": (1.0, 0.65, 0.2, 1),
+                  "gnd": e_metal, "on": e_metal, "op": e_metal, "vdd": e_metal}
+        counts = {"n": 18, "p": 18, "gnd": 5, "on": 6, "op": 6, "vdd": 5}
+        for key, pts in paths.items():
             segs = [math.dist(pts[i], pts[i + 1]) for i in range(len(pts) - 1)]
             total = sum(segs)
-            for i in range(18):
+            for i in range(counts[key]):
                 np_ = self.cube.copyTo(self.carrier_root)
-                np_.setScale(0.11)
+                np_.setScale(0.11 if key in ("n", "p") else 0.09)
                 np_.setColor(*colors[key])
                 np_.setBin("fixed", 45)
                 np_.setDepthTest(False)
                 np_.setTransparency(TransparencyAttrib.MAlpha)
-                self.carriers.append([np_, key, rnd.random(), pts, segs, total, y - 0.08])
+                self.carriers.append([np_, key, rnd.random(), pts, segs, total])
         self._apply_sim_alpha()
+
+    # which device current each carrier path carries
+    _PATH_CURRENT = {"n": "in", "gnd": "in", "on": "in", "p": "ip", "vdd": "ip", "op": "ip"}
 
     def _activity(self, key: str) -> float:
         v = self.sim_values or {}
-        cur = max(v.get("i" + key, 0.0), 0.0)
+        cur = max(v.get(self._PATH_CURRENT[key], 0.0), 0.0)
         iref = v.get("iref")
         if iref:
             return min(math.sqrt(cur / iref), 1.0)
@@ -562,21 +589,21 @@ class WaferScene:
     def _update_carriers(self, dt):
         if not self.carriers:
             return
-        act = {k: self._activity(k) for k in ("n", "p")}
+        act = {k: self._activity(k) for k in self._PATH_CURRENT}
         for c in self.carriers:
-            np_, key, s, pts, segs, total, y = c
+            np_, key, s, pts, segs, total = c
             a = act[key]
-            s = (s + dt * (0.05 + 0.6 * a) * a) % 1.0
+            # same drift speed (scene units / s) on every path, so short wires don't race
+            s = (s + dt * (0.05 + 0.6 * a) * a * 7.0 / total) % 1.0
             c[2] = s
             d = s * total
             for i, L in enumerate(segs):
                 if d <= L or i == len(segs) - 1:
                     t = d / L if L else 0
-                    x = pts[i][0] + (pts[i + 1][0] - pts[i][0]) * t
-                    z = pts[i][1] + (pts[i + 1][1] - pts[i][1]) * t
+                    pos = [pts[i][j] + (pts[i + 1][j] - pts[i][j]) * t for j in range(3)]
                     break
                 d -= L
-            np_.setPos(x, y, z)
+            np_.setPos(*pos)
             np_.setAlphaScale(0.15 + 0.85 * a)
 
     # ---------------------------------------------------------------- options
