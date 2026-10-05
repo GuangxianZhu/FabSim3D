@@ -13,6 +13,22 @@
 
 ## 运行
 
+### Windows 一键启动
+
+双击仓库根目录下的 **`start.bat`** 即可。第一次运行会自动：
+
+1. 查找已安装的 Python 3（优先 3.10–3.12）；
+2. 在 `.venv/` 里创建独立的虚拟环境；
+3. 安装 `requirements.txt` 中的依赖（默认源失败时自动改用清华镜像）；
+4. 启动程序。
+
+之后再双击会直接启动；`requirements.txt` 有变化时会自动重新安装依赖。
+如果提示找不到 Python，请从 [python.org](https://www.python.org/downloads/) 安装 64 位 Python 3，安装时勾选 “Add python.exe to PATH”。
+命令行参数可以直接传给脚本，例如 `start.bat --lang en`、`start.bat --lesson 1`。
+环境出问题时，删除 `.venv` 文件夹再双击即可重建。
+
+### 手动运行
+
 ```bash
 pip install -r requirements.txt
 python main.py              # 中文界面
