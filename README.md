@@ -6,6 +6,15 @@ CMOS 前端工艺的交互式 3D 演示：从 P 型硅片开始，经过阱、�
 可以切换 6 代工艺，按器件结构的演进排列：**LOCOS（1 µm）→ STI + CMP（0.25 µm）→ 平面 HKMG（28 nm）→
 FinFET → GAA 纳米片 → CFET（NMOS/PMOS 上下堆叠）**。每一代都有自己的 3D 结构和电学参数，讲解模式也能直接使用。
 
+![STI + CMP 工艺从裸片到反相器的完整动画（3 倍速）](docs/gif_build_sti.gif)
+
+<p align="center">
+  <img src="docs/gif_generations.gif" width="49%" alt="六代工艺的最终器件结构">
+  <img src="docs/gif_build_gaa.gif" width="49%" alt="GAA 纳米片工艺逐步搭建">
+</p>
+
+![3D 载流子仿真：Vin 从 0 扫到 VDD，VTC 与电源电流 IDD 同步变化](docs/gif_inverter_sim.gif)
+
 ![仿真模式](docs/screenshot_sim.png)
 
 ![STI 流程中的 CMP](docs/screenshot_sti_cmp.png)
@@ -67,6 +76,7 @@ Noto CJK/文泉驿 (Linux)；也可以把任意 `.ttf/.otf/.ttc` 放进 `fonts/`
 
 **3D 载流子仿真**：工艺完成后打开，会自动开启剖面，沟道反型层会随 Vin 亮起，
 电子（青色）和空穴（橙色）按电流大小流动，终端标签显示实时电压。点“播放瞬态”会用瞬态仿真结果驱动动画。
+（见上方第四张动图：Vin 扫过翻转点时两管同时导通，IDD 出现尖峰。）
 
 **测验模式**：每完成一步弹出一道选择题，附带解析，左栏显示得分。
 
@@ -177,6 +187,7 @@ fabsim3d/device_model.py      器件与反相器模型 + 二级效应链 (纯 nu
 fabsim3d/plots.py             matplotlib → Panda3D 纹理
 fabsim3d/materials.py         材料颜色与名称
 fabsim3d/i18n.py              中英文字符串
+tools/make_gifs.py            录制 README 动图 (离屏渲染 + ffmpeg)
 ```
 
 **工艺动作**（`process_core`）：`deposit`（保形/平坦化淀积）、`coat`、`expose`、`develop`、`pattern`（薄膜刻蚀）、
@@ -206,4 +217,12 @@ python main.py --shot out.png --step 21 --tab elec --sim --vin 1.2 --plot idvd
 python main.py --shot litho.png --step 2 --anim 2.0     # 截取第 3 步动画中途 2 秒的画面
 python main.py --shot cmp.png --flow sti --step 7 --anim 1.2   # STI 流程的 CMP 动画
 python main.py --shot vtl.png --flow sti --step 27 --tab elec --plot vtl   # Vt-L 曲线
+```
+
+README 里的动图由 `tools/make_gifs.py` 离屏录制（用假时钟逐帧推进，帧率与渲染速度无关，需要 ffmpeg）：
+
+```bash
+python tools/make_gifs.py                 # 重新生成 docs/gif_*.gif
+python tools/make_gifs.py inverter        # 只录一段：build_sti / build_gaa / generations / inverter
+xvfb-run -a -s "-screen 0 1920x1080x24" python tools/make_gifs.py   # 无显示器的 Linux
 ```
