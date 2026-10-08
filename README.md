@@ -1,7 +1,10 @@
 # FabSim3D — CMOS 工艺 3D 教学演示 (Panda3D)
 
-平面 CMOS 前端工艺的交互式 3D 演示：从 P 型硅片开始，经过阱、器件隔离（**LOCOS** 或 **STI + CMP** 两代工艺可切换）、
-多晶硅栅、自对准源漏注入、ILD、接触孔和金属 1，最后得到一个 **CMOS 反相器**，并由工艺参数直接推导出它的**电学特性**。
+CMOS 前端工艺的交互式 3D 演示：从 P 型硅片开始，经过阱、器件隔离、栅极、自对准源漏注入、ILD、接触孔和金属 1，
+最后得到一个 **CMOS 反相器**，并由工艺参数直接推导出它的**电学特性**。
+
+可以切换 6 代工艺，按器件结构的演进排列：**LOCOS（1 µm）→ STI + CMP（0.25 µm）→ 平面 HKMG（28 nm）→
+FinFET → GAA 纳米片 → CFET（NMOS/PMOS 上下堆叠）**。每一代都有自己的 3D 结构和电学参数，讲解模式也能直接使用。
 
 ![仿真模式](docs/screenshot_sim.png)
 
@@ -10,6 +13,12 @@
 ![LDD + 侧墙与 Vt-L 曲线](docs/screenshot_ldd_vtl.png)
 
 ![讲解模式：实验课②](docs/screenshot_guide_lesson2.png)
+
+![FinFET：鳍、伪栅与侧墙](docs/screenshot_finfet.png)
+
+![GAA 纳米片：沟道释放后的剖面与 Vt-L](docs/screenshot_gaa.png)
+
+![CFET：NMOS/PMOS 上下堆叠 + 背面供电](docs/screenshot_cfet.png)
 
 ## 运行
 
@@ -34,6 +43,10 @@ pip install -r requirements.txt
 python main.py              # 中文界面
 python main.py --lang en    # English UI
 python main.py --flow sti   # 直接打开 STI + CMP 工艺
+python main.py --flow hkmg  # 平面 HKMG（28 nm，后栅 RMG）
+python main.py --flow finfet
+python main.py --flow gaa
+python main.py --flow cfet
 python main.py --lesson 1   # 讲解模式，直接进入实验课①
 python main.py --size 1920x1080 --fullscreen
 ```
@@ -46,7 +59,7 @@ Noto CJK/文泉驿 (Linux)；也可以把任意 `.ttf/.otf/.ttc` 放进 `fonts/`
 
 | 区域 | 内容 |
 |---|---|
-| 左栏 | 工艺代切换（经典 LOCOS / STI + CMP）、工艺步骤列表（可以点击跳转）、上一步/播放/下一步、动画速度、剖面切割与切面位置、棱线/标注开关、视角预设、中英切换、测验模式 |
+| 左栏 | 工艺代切换（LOCOS / STI + CMP / HKMG / FinFET / GAA / CFET）、工艺步骤列表（可以点击跳转）、上一步/播放/下一步、动画速度、剖面切割与切面位置、棱线/标注开关、视角预设、中英切换、测验模式 |
 | 中间 | 3D 晶圆模型。左键拖动旋转，右键拖动平移，滚轮缩放。快捷键：← → 切换步骤，空格播放/暂停 |
 | 右栏 · 工艺说明 | 当前步骤的原理说明、当前子阶段（涂胶/曝光/显影…）、工艺参数、材料图例 |
 | 右栏 · 电学特性 | Id-Vg（对数坐标）、Id-Vd（NMOS 第一象限/PMOS 第三象限）、反相器 VTC、瞬态响应、Vt-L（短沟道效应）；Vin 滑块会在所有图上标出工作点 |
@@ -80,7 +93,7 @@ Noto CJK/文泉驿 (Linux)；也可以把任意 `.ttf/.otf/.ttc` 放进 `fonts/`
 
 ## 工艺流程
 
-左栏顶部可以切换两套工艺，对比隔离技术的演进：
+左栏顶部可以切换 6 代工艺。前两代对比隔离技术的演进，后四代对比晶体管结构的演进：
 
 **经典 LOCOS（约 1.0 µm 代，22 步，7 块掩膜）**
 
@@ -100,7 +113,21 @@ Noto CJK/文泉驿 (Linux)；也可以把任意 `.ttf/.otf/.ttc` 放进 `fonts/`
 
 切换工艺代时会套用该代的典型参数：1 µm 代用 tox 20 nm、VDD 5 V、L 1 µm；0.25 µm 代用 tox 5 nm、VDD 2.5 V、L 0.25 µm。
 
-两套工艺的电学差异：
+**先进工艺（按 AIST 路线图的顺序）**：都采用后栅（RMG）高 k 金属栅、铜互连
+
+- **平面 HKMG（28 nm，29 步）**：STI → 伪多晶栅 → **嵌入式 SiGe 源漏（PMOS 应变）** → N+ 源漏 → 毫秒退火 →
+  NiSi → ILD0 + CMP 露出伪栅 → **去伪栅** → **HfO2 + N/P 功函数金属 + 填充金属** → 接触孔 → Cu 大马士革 M1
+- **FinFET（22 步）**：**SADP 自对准双重图形刻鳍** → FCVD 填槽 + CMP → **鳍顶露出（STI 回刻）** → 横跨鳍的伪栅 →
+  侧墙 → 外延源漏 → RMG + HKMG 包住鳍的三面 → 接触孔/铜
+- **GAA 纳米片（22 步）**：**Si/SiGe 超晶格外延** → 叠层刻蚀 → 伪栅 → **SiGe 侧向凹进 + 内侧墙** → 外延源漏 →
+  去伪栅 → **沟道释放（选择性去除 SiGe）** → HKMG 四面包围每片纳米片
+- **CFET（23 步）**：NMOS 纳米片在下、PMOS 在上，中间用介质隔离（MDI）→ 上下分别外延 N/P 源漏 →
+  上下共用一根栅，上下用不同功函数金属 → 深接触把上下漏极连成 Vout → **背面供电（BSPDN）**：减薄衬底，从背面接电源轨
+
+切换工艺代时会套用该代的典型参数（例如 FinFET：EOT 0.9 nm、鳍宽 8 nm、L 20 nm、VDD 0.8 V；GAA：EOT 0.8 nm、片厚 5 nm、L 15 nm、VDD 0.7 V），
+左栏的参数滑块也会换成该代对应的旋钮（鳍宽/片厚、功函数等）。
+
+各代工艺的电学差异：
 
 - **短沟道效应**：Vt roll-off、DIBL 和速度饱和。结深越浅越弱，所以 LDD 能明显压低 DIBL。“电学特性 → Vt-L”图会画出 Vt 随栅长的变化，同时给出“无 LDD 深结”的对比线。
 - **窄宽度效应**：隔离方式会影响阈值电压。LOCOS 的鸟嘴让窄管 |Vt| 升高，STI 的槽角电场集中让 |Vt| 降低（反窄宽度效应）。
@@ -123,7 +150,10 @@ CMP 抛光垫贴着表面边磨边下降。
   - **窄宽度效应**：LOCOS 让 |Vt| 升高，STI 让 |Vt| 降低
   - **短沟道效应**（`sce`）：Vt roll-off（Yau 电荷分享模型）、DIBL（σ = 0.6·exp(−L/2l)，l = √(εsi/εox·tox·xj)）、速度饱和（Ec = 2vsat/µ）。有 `ldd` 时结深 xj = 80 nm，没有时 xj = 250 nm
   - 如果 roll-off 把 Vt 压到负值，器件变成常开（穿通），模型会如实体现
-- **Vt-L 曲线**：分别在低 Vds 和 Vds = VDD 下画 Vt，两线之差就是 DIBL
+- **金属栅**（HKMG 及之后）：Vfb 由金属功函数 WF 决定（φms = WF − (χ + Eg/2 ± φF)），不再用多晶硅；tox 视为等效氧化层厚度 EOT
+- **多栅静电控制**（`finfet`/`gaa`/`cfet`）：用自然长度 λ = √(εsi/(N·εox)·tsi·EOT·(1 + εox·tsi/(4εsi·EOT)))，FinFET 取 N = 3、GAA 取 N = 4。
+  DIBL、Vt roll-off 和亚阈值摆幅都随 exp(−L/2λ) 变化，所以同样的栅长下 GAA 的 DIBL 和 SS 都比 FinFET 小，比平面器件小得多
+- **Vt-L 曲线**：分别在低 Vds 和 Vds = VDD 下画 Vt，两线之差就是 DIBL。栅长小于 100 nm 时横轴改用 nm 刻度
 
 ## 代码结构
 
@@ -137,6 +167,11 @@ fabsim3d/process_core.py      工艺引擎：晶圆状态、动作、Flow/Step/P
 fabsim3d/flows/__init__.py    工艺代注册表 FLOWS
 fabsim3d/flows/locos.py       经典 LOCOS 流程
 fabsim3d/flows/sti.py         STI + CMP 流程（后半段复用 LOCOS 的步骤）
+fabsim3d/flows/_modern.py     先进工艺共用步骤：ILD0、去伪栅、HKMG、接触孔、铜 M1
+fabsim3d/flows/hkmg.py        平面 HKMG 28 nm 流程
+fabsim3d/flows/finfet.py      FinFET 流程
+fabsim3d/flows/gaa.py         GAA 纳米片流程
+fabsim3d/flows/cfet.py        CFET（互补堆叠 + 背面供电）流程
 fabsim3d/geometry.py          x-z 截面凸多边形沿 y 拉伸的实体、矩形运算、保形淀积
 fabsim3d/device_model.py      器件与反相器模型 + 二级效应链 (纯 numpy)
 fabsim3d/plots.py             matplotlib → Panda3D 纹理

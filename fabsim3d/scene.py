@@ -134,6 +134,44 @@ def _unit_cube() -> NodePath:
     return build_solids_node("cube", [(s, (1, 1, 1, 1))], -99, False)
 
 
+def default_channels(lay) -> list:
+    """Inversion layers of the planar devices: a thin sheet under each gate."""
+    return [(key, Solid.box(g[0] - 0.12, g[1] + 0.12, 1.5, 6.5, -0.06, -0.005))
+            for key, g in (("n", lay["gn"]), ("p", lay["gp"]))]
+
+
+def default_carrier_paths(lay, ym: float) -> dict:
+    """(x, y, z) paths.  "n"/"p": carriers inside each transistor, contact plug ->
+    S/D -> channel -> S/D -> plug.  The rest is electron flow in metal 1, which
+    closes the loop GND -> NMOS -> Vout -> PMOS -> VDD (conventional current runs
+    the other way).  The Vout wire is split at the output node: its NMOS half
+    carries In and its PMOS half Ip, so during a transient only the half that
+    charges / discharges CL flows."""
+    zm = 1.55                      # inside metal 1
+    yr = 4.7                       # far end of the GND / VDD rails
+    xo = (7.15 + 13.35) / 2        # Vout node (where the load CL hangs)
+    return {
+        "n": [(3.35, ym, 1.45), (3.35, ym, -0.15), (lay["gn"][0], ym, -0.035),
+              (lay["gn"][1], ym, -0.035), (7.15, ym, -0.15), (7.15, ym, 1.45)],
+        "p": [(17.15, ym, 1.45), (17.15, ym, -0.15), (lay["gp"][1], ym, -0.035),
+              (lay["gp"][0], ym, -0.035), (13.35, ym, -0.15), (13.35, ym, 1.45)],
+        "gnd": [(3.35, yr, zm), (3.35, ym, zm), (3.35, ym, 1.45)],
+        "on": [(7.15, ym, 1.45), (7.15, ym, zm), (xo, ym, zm)],
+        "op": [(xo, ym, zm), (13.35, ym, zm), (13.35, ym, 1.45)],
+        "vdd": [(17.15, ym, 1.45), (17.15, ym, zm), (17.15, yr, zm)],
+    }
+
+
+def _snap_to_bands(y: float, bands) -> float:
+    """Nearest y inside one of the silicon bands (fins / nanosheet stacks)."""
+    best = None
+    for y0, y1 in bands:
+        c = min(max(y, y0 + 0.04), y1 - 0.04)
+        if best is None or abs(c - y) < abs(best - y):
+            best = c
+    return y if best is None else best
+
+
 # --------------------------------------------------------------------------
 
 class Particle:
@@ -489,7 +527,7 @@ class WaferScene:
                 self._label(i18n.pick(zh, en), (x, yf, z), 0.38)
         if self.terminal_mode:
             vals = self.sim_values or {}
-            for name, x, y in (flow.terminal_labels if flow else []):
+            for name, x, y, *z in (flow.terminal_labels if flow else []):
                 text = name
                 key = name.lower()
                 if key in vals:
@@ -497,10 +535,15 @@ class WaferScene:
                     if key == "vdd" and "ip" in vals:
                         text += f"\nIDD = {_fmt_amp(vals['ip'])}"
                 ly = max(y, self.cut_y + 0.4) if y < 6 else y
-                self._label(text, (x, ly, 2.2), 0.36, fg=(1, 0.95, 0.4, 1), bg=(0.05, 0.05, 0.1, 0.75))
-            ln, lp = self.ctx.lay["gnc"], self.ctx.lay["gpc"]
-            self._label("NMOS", (ln, 8.6, 1.9), 0.42, fg=(1, 0.6, 0.6, 1))
-            self._label("PMOS", (lp, 8.6, 1.9), 0.42, fg=(0.6, 0.7, 1, 1))
+                self._label(text, (x, ly, z[0] if z else 2.2), 0.36, fg=(1, 0.95, 0.4, 1),
+                            bg=(0.05, 0.05, 0.1, 0.75))
+            if flow and flow.device_labels:
+                for text, x, y, z, fg in flow.device_labels:
+                    self._label(text if isinstance(text, str) else i18n.pick(*text), (x, y, z), 0.42, fg=fg)
+            else:
+                ln, lp = self.ctx.lay["gnc"], self.ctx.lay["gpc"]
+                self._label("NMOS", (ln, 8.6, 1.9), 0.42, fg=(1, 0.6, 0.6, 1))
+                self._label("PMOS", (lp, 8.6, 1.9), 0.42, fg=(0.6, 0.7, 1, 1))
 
     # ---------------------------------------------------------------- simulation
     def _rebuild_channels(self):
@@ -513,9 +556,14 @@ class WaferScene:
         if not (self.terminal_mode and self.sim_values is not None and self.ctx):
             return
         lay = self.ctx.lay
-        for key, g, material in (("n", lay["gn"], "channel_n"), ("p", lay["gp"], "channel_p")):
-            s = Solid.box(g[0] - 0.12, g[1] + 0.12, 1.5, 6.5, -0.06, -0.005)
-            node = build_solids_node("chan_" + key, [(s, mat(material).color[:3] + (1.0,))], self.cut_y, False)
+        flow = self.ctx.flow
+        chans = flow.channel_fn(lay) if flow and flow.channel_fn else default_channels(lay)
+        by_key: Dict[str, list] = {}
+        for key, s in chans:
+            col = mat("channel_" + key).color[:3] + (1.0,)
+            by_key.setdefault(key, []).append((s, col))
+        for key, items in by_key.items():
+            node = build_solids_node("chan_" + key, items, self.cut_y, False)
             node.reparentTo(self.carrier_root)
             node.setTransparency(TransparencyAttrib.MAlpha)
             node.setDepthOffset(12)
@@ -526,25 +574,12 @@ class WaferScene:
         y = max(self.cut_y, 2.6) + 0.02 if self.cut_y > 0 else 3.5
         y = min(y, 4.3)
         ym = y - 0.08                  # carrier plane, just behind the cut
-        zm = 1.55                      # inside metal 1
-        yr = 4.7                       # far end of the GND / VDD rails
-        xo = (7.15 + 13.35) / 2        # Vout node (where the load CL hangs)
-        # (x, y, z) paths.  "n"/"p": carriers inside each transistor, contact plug ->
-        # S/D -> channel -> S/D -> plug.  The rest is electron flow in metal 1, which
-        # closes the loop GND -> NMOS -> Vout -> PMOS -> VDD (conventional current runs
-        # the other way).  The Vout wire is split at the output node: its NMOS half
-        # carries In and its PMOS half Ip, so during a transient only the half that
-        # charges / discharges CL flows.
-        paths = {
-            "n": [(3.35, ym, 1.45), (3.35, ym, -0.15), (lay["gn"][0], ym, -0.035),
-                  (lay["gn"][1], ym, -0.035), (7.15, ym, -0.15), (7.15, ym, 1.45)],
-            "p": [(17.15, ym, 1.45), (17.15, ym, -0.15), (lay["gp"][1], ym, -0.035),
-                  (lay["gp"][0], ym, -0.035), (13.35, ym, -0.15), (13.35, ym, 1.45)],
-            "gnd": [(3.35, yr, zm), (3.35, ym, zm), (3.35, ym, 1.45)],
-            "on": [(7.15, ym, 1.45), (7.15, ym, zm), (xo, ym, zm)],
-            "op": [(xo, ym, zm), (13.35, ym, zm), (13.35, ym, 1.45)],
-            "vdd": [(17.15, ym, 1.45), (17.15, ym, zm), (17.15, yr, zm)],
-        }
+        if flow and flow.carrier_ys:   # fins / nanosheets: carriers stay inside the silicon
+            ym = _snap_to_bands(ym, flow.carrier_ys)
+        if flow and flow.carrier_fn:
+            paths = flow.carrier_fn(lay, ym)
+        else:
+            paths = default_carrier_paths(lay, ym)
         e_metal = (0.35, 1.0, 1.0, 1)      # electrons, same colour as in the NMOS
         colors = {"n": (0.35, 1.0, 1.0, 1), "p": (1.0, 0.65, 0.2, 1),
                   "gnd": e_metal, "on": e_metal, "op": e_metal, "vdd": e_metal}

@@ -183,9 +183,21 @@ class Flow:
     region_labels: List[tuple] = field(default_factory=list)   # (layer, zh, en, x, z)
     terminal_labels: List[tuple] = field(default_factory=list)  # (name, x, y)
     defaults: Dict[str, float] = field(default_factory=dict)    # typical ProcessParams of the era
+    short: Optional[Tuple[str, str]] = None   # compact name for the flow selector
+    # optional per-generation hooks (None = the planar side-by-side inverter)
+    layout_fn: Optional[Callable[[ProcessParams], dict]] = None  # replaces layout()
+    sliders: Optional[List[tuple]] = None     # (key, i18n key, lo, hi, log) for the Parameters tab
+    device_labels: Optional[List[tuple]] = None   # (text, x, y, z, rgba) shown in simulation mode
+    channel_fn: Optional[Callable[[dict], List[tuple]]] = None   # lay -> [(key "n"/"p", Solid)]
+    carrier_fn: Optional[Callable[[dict, float], dict]] = None   # (lay, y) -> carrier paths
+    carrier_ys: List[Tuple[float, float]] = field(default_factory=list)  # silicon bands carriers snap to
 
     def default_params(self) -> ProcessParams:
         return ProcessParams(**self.defaults)
+
+    @property
+    def label(self) -> Tuple[str, str]:
+        return self.short or self.name
 
     def step_index(self, key: str) -> int:
         return next(i for i, s in enumerate(self.steps) if s.key == key)
@@ -228,7 +240,8 @@ def layout(p: ProcessParams) -> dict:
 
 
 def make_ctx(p: ProcessParams, flow: Optional[Flow] = None, faults: Optional[Faults] = None) -> Ctx:
-    return Ctx(p, layout(p), flow, faults or Faults())
+    lay = flow.layout_fn(p) if flow and flow.layout_fn else layout(p)
+    return Ctx(p, lay, flow, faults or Faults())
 
 
 # --------------------------------------------------------------------------
@@ -327,6 +340,60 @@ def implant(layer, material, rects, z0=-0.3, ion_color=(1, 0.9, 0.2, 1),
             pol = "n" if species in ("P", "As", "Sb") else "p"
             w.dopants.append(DopantEvent(w.current_step, species, pol, float(d or 0.0),
                                          float(energy_kev or 0.0), rs, 0.0))
+    return act
+
+
+def implant_solids(layer, material, solids_fn, ion_color=(1, 0.9, 0.2, 1), species=None, dose=None,
+                   energy_kev=None, region=None):
+    """Ion implantation whose doped volume follows the topography (e.g. only the
+    fins, not the oxide between them).  solids_fn(ctx) gives the doped solids;
+    region(ctx) the implanted footprint recorded in the DopantEvent."""
+    def act(w: Wafer, c: Ctx, a: PhaseAnim):
+        snapshot = w.solids()
+        new = solids_fn(c)
+        w.layer(layer, material).solids.extend(new)
+        a.fade_in.extend(new)
+        a.particles.append(ParticleSpec("ion", ion_color, None, 220, snapshot))
+        if species:
+            d = dose(c) if callable(dose) else dose
+            pol = "n" if species in ("P", "As", "Sb") else "p"
+            rs = region(c) if region else [s.footprint for s in new]
+            w.dopants.append(DopantEvent(w.current_step, species, pol, float(d or 0.0),
+                                         float(energy_kev or 0.0), rs, 0.0))
+    return act
+
+
+def add_solids(layer, material, solids_fn, mode="grow", particles=None):
+    """Add explicit solids (epitaxy, liners, ...) with a grow or fade-in animation."""
+    def act(w: Wafer, c: Ctx, a: PhaseAnim):
+        snapshot = w.solids()
+        new = solids_fn(c)
+        w.layer(layer, material).solids.extend(new)
+        (a.grow if mode == "grow" else a.fade_in).extend(new)
+        if particles:
+            a.particles.append(ParticleSpec(particles[0], particles[1], None, 90, snapshot))
+    return act
+
+
+def convert(src, dst, material, keep_rects, mode="fade"):
+    """Move the parts of layer `src` inside keep_rects(ctx) into layer `dst`
+    with a new material (e.g. SiGe under the spacers -> inner spacer)."""
+    def act(w: Wafer, c: Ctx, a: PhaseAnim):
+        lay = w.layers.get(src)
+        if not lay:
+            return
+        rects = keep_rects(c)
+        stay, moved = [], []
+        for s in lay.solids:
+            inside, outside = split_box(s, rects)
+            moved += inside
+            stay += outside
+        lay.solids = stay
+        if not stay:
+            w.remove(src)
+        a.ghosts += [(lay.material, s, "fade") for s in moved]
+        w.layer(dst, material).solids.extend(moved)
+        a.fade_in.extend(moved)
     return act
 
 
@@ -453,7 +520,8 @@ def _gate_top(w: Wafer, layer: str, g: Tuple[float, float]) -> float:
     return max(tops) if tops else 0.4
 
 
-def _spacer_prism(edge: float, side: int, z0: float, z1: float, w: float, nseg: int = 6) -> Solid:
+def _spacer_prism(edge: float, side: int, z0: float, z1: float, w: float, nseg: int = 6,
+                  ys: Tuple[float, float] = GATE_Y) -> Solid:
     """Quarter-ellipse spacer cross-section against a gate edge (side=-1 left, +1 right)."""
     import math
     h = z1 - z0
@@ -463,9 +531,21 @@ def _spacer_prism(edge: float, side: int, z0: float, z1: float, w: float, nseg: 
         pts = [(edge - w, z0), (edge, z0)] + arc[:-1]
     else:
         pts = [(edge, z0), (edge + w, z0)] + list(reversed(arc))[1:-1] + [(edge, z1)]
-    s = Solid(pts, *GATE_Y)
+    s = Solid(pts, *ys)
     s.anchor = z0
     return s
+
+
+def gate_keys(c: Ctx) -> List[Tuple[str, str]]:
+    """(gate layer, layout span key) of every gate (one shared gate in a CFET)."""
+    return c.lay.get("gate_keys", [("gate_n", "gn"), ("gate_p", "gp")])
+
+
+def _bands(c: Ctx) -> List[Tuple[float, float, float]]:
+    """(y0, y1, z0) strips along the gate: where the spacer foot sits.  Planar
+    devices have one strip on the silicon surface; in a FinFET the spacer reaches
+    down to the STI between the fins."""
+    return c.lay.get("spacer_bands", [(GATE_Y[0], GATE_Y[1], 0.0)])
 
 
 def spacer_deposit(thickness=SPACER_W):
@@ -474,13 +554,14 @@ def spacer_deposit(thickness=SPACER_W):
         snapshot = w.solids()
         cells = conformal_cells(snapshot, [DOMAIN], DOMAIN, thickness=thickness * 0.6)
         side = []
-        for layer, key in (("gate_n", "gn"), ("gate_p", "gp")):
+        for layer, key in gate_keys(c):
             g = gate_span(c, key)
             top = _gate_top(w, layer, g)
             for x0, x1 in ((g[0] - thickness, g[0]), (g[1], g[1] + thickness)):
-                b = Solid.box(x0, x1, GATE_Y[0], GATE_Y[1], 0.0, top + thickness * 0.6)
-                b.anchor = 0.0
-                side.append(b)
+                for y0, y1, z0 in _bands(c):
+                    b = Solid.box(x0, x1, y0, y1, z0, top + thickness * 0.6)
+                    b.anchor = z0
+                    side.append(b)
         w.layer("spacer_film", "spacer").solids = cells + side
         a.grow.extend(cells + side)
         a.particles.append(ParticleSpec("depo", (0.5, 0.85, 0.6, 1), None, 90, snapshot))
@@ -495,11 +576,12 @@ def spacer_etchback():
         if film:
             a.ghosts += [("spacer", s, "etch") for s in film.solids]
         sp = []
-        for layer, key in (("gate_n", "gn"), ("gate_p", "gp")):
+        for layer, key in gate_keys(c):
             g = gate_span(c, key)
             top = _gate_top(w, layer, g)
-            sp.append(_spacer_prism(g[0], -1, 0.0, top, SPACER_W))
-            sp.append(_spacer_prism(g[1], +1, 0.0, top, SPACER_W))
+            for y0, y1, z0 in _bands(c):
+                sp.append(_spacer_prism(g[0], -1, z0, top, SPACER_W, ys=(y0, y1)))
+                sp.append(_spacer_prism(g[1], +1, z0, top, SPACER_W, ys=(y0, y1)))
         w.layer("spacer", "spacer").solids = sp
         a.fade_in.extend(sp)
         a.particles.append(ParticleSpec("plasma", (1.0, 0.45, 0.85, 1), None, 140, w.solids()))
@@ -514,8 +596,8 @@ def split_gates(w: Wafer, c: Ctx, a: PhaseAnim):
     lay = w.remove("poly")
     if not lay:
         return
-    w.layer("gate_n", "poly").solids = [s for s in lay.solids if s.xmax < 10.5]
-    w.layer("gate_p", "poly").solids = [s for s in lay.solids if s.xmin >= 10.5]
+    w.layer("gate_n", lay.material).solids = [s for s in lay.solids if s.xmax < 10.5]
+    w.layer("gate_p", lay.material).solids = [s for s in lay.solids if s.xmin >= 10.5]
 
 
 def sd_annealed(act, g, grow=0.15, depth=-0.42):

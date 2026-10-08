@@ -21,16 +21,41 @@ def run(app, seconds, speed=1.0):
         app.taskMgr.step()
 
 
-@pytest.mark.parametrize("flow", ["locos", "sti"])
+FLOW_KEYS = ["locos", "sti", "hkmg", "finfet", "gaa", "cfet"]
+
+
+@pytest.mark.parametrize("flow", FLOW_KEYS)
 def test_play_through_all_steps(app, flow):
     app.set_flow(flow)
     app.goto(0)
     for i in range(1, len(app.steps)):
         app.next_step()
         assert app.anim_step == i
-        run(app, 9, speed=6.0)
+        run(app, 16, speed=6.0)
         assert app.anim_step is None and app.step == i
     assert app.is_done()
+
+
+@pytest.mark.parametrize("flow", FLOW_KEYS[2:])
+def test_advanced_flow_simulation_and_sliders(app, flow):
+    app.set_flow(flow)
+    app.goto(len(app.steps) - 1)
+    app.right_tab = "elec"
+    app.sim3d = False
+    app.toggle_sim3d()
+    assert app.scene.sim_values is not None and app.scene.carriers and app.scene.channel_nodes
+    app.play_transient()
+    run(app, 1.0)
+    for kind in ("idvg", "idvd", "vtc", "tran", "vtl"):
+        app._set_plot(kind)
+        app._redraw_plot()
+    for sl in app.param_widgets:              # every slider of this generation
+        sl["value"] = 0.3
+        app.taskMgr.step()
+    app._commit_params()
+    app.reset_params()
+    app.tran_t = None
+    app.toggle_sim3d()
 
 
 def test_simulation_and_transient(app):

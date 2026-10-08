@@ -44,7 +44,11 @@ def test_every_step_builds_and_has_text(flow):
             run_phase(w, ctx, ph)
 
 
-@pytest.mark.parametrize("flow", list(FLOWS.values()), ids=list(FLOWS))
+PLANAR = [f for f in FLOWS.values() if f.key in ("locos", "sti")]
+ADVANCED = [f for f in FLOWS.values() if f.key not in ("locos", "sti")]
+
+
+@pytest.mark.parametrize("flow", PLANAR, ids=[f.key for f in PLANAR])
 def test_final_structure(flow):
     w = build_until(make_ctx(ProcessParams(), flow), len(flow.steps) - 1)
     iso = "fox" if flow.key == "locos" else "sti"
@@ -141,3 +145,76 @@ def test_flow_default_params_are_era_typical():
     for s in (lo, hi):
         assert 0.3 < s.vtn < 0.6 and -0.6 < s.vtp < -0.3
     assert hi.tran.tphl < lo.tran.tphl          # newer generation is faster
+
+
+@pytest.mark.parametrize("flow", ADVANCED, ids=[f.key for f in ADVANCED])
+def test_advanced_final_structure(flow):
+    """Gate-last flows end with a HKMG stack, plugs and copper; no dummy gate is left."""
+    w = build_until(make_ctx(flow.default_params(), flow), len(flow.steps) - 1)
+    for name in ("sti", "spacer", "hk", "gfill", "plug", "cu", "ild0", "ild"):
+        assert w.has(name), name
+    for name in ("resist", "resist_exp", "nitride", "padox", "poly", "gate", "gate_n", "gate_p", "sige", "ni"):
+        assert not w.has(name), name
+    assert {round(s.zmax, 6) for s in w.layers["cu"].solids} == {1.75}       # copper CMP is flat
+    gate_top = max(s.zmax for s in w.layers["gfill"].solids)
+    assert abs(gate_top - max(s.zmax for s in w.layers["ild0"].solids)) < 1e-9   # metal CMP stops on ILD0
+
+
+def test_finfet_fins_and_wrapped_gate():
+    from fabsim3d.flows import finfet
+    f = FLOWS["finfet"]
+    ctx = make_ctx(f.default_params(), f)
+    w = build_until(ctx, f.step_index("fin_reveal"))
+    sti_top = max(s.zmax for s in w.layers["sti"].solids)
+    fin_tops = [s.zmax for s in w.layers["sub"].solids if s.zmax > sti_top]
+    assert len(fin_tops) == 2 * len(finfet.FIN_YC) and all(abs(z) < 1e-9 for z in fin_tops)
+    w = build_until(ctx, f.step_index("hkmg"))
+    # high-k lines both sidewalls of every fin under each gate
+    walls = [s for s in w.layers["hk"].solids if abs(s.zmin - finfet.FIN_REVEAL) < 1e-9 and s.y1 - s.y0 < 0.05]
+    assert len(walls) == 2 * 2 * len(finfet.FIN_YC)
+
+
+def test_gaa_sheets_released_and_wrapped():
+    from fabsim3d.flows import gaa
+    f = FLOWS["gaa"]
+    ctx = make_ctx(f.default_params(), f)
+    before = build_until(ctx, f.step_index("inner_spacer"))
+    assert before.has("sige") and before.has("inner")
+    w = build_until(ctx, len(f.steps) - 1)
+    assert not w.has("sige") and len(w.layers["sheet"].solids) == 2 * len(gaa.SHEETS)
+    g = ctx.lay["gn"]
+    for z0, z1 in gaa.SIGE:            # every former SiGe gap under the gate now holds gate metal
+        zc = (z0 + z1) / 2
+        assert any(s.xmin <= g[0] + 1e-9 and s.xmax >= g[1] - 1e-9 and s.zmin <= zc <= s.zmax
+                   for s in w.layers["wfn"].solids), (z0, z1)
+
+
+def test_cfet_stack_and_backside():
+    from fabsim3d.flows import cfet
+    f = FLOWS["cfet"]
+    ctx = make_ctx(f.default_params(), f)
+    w = build_until(ctx, len(f.steps) - 1)
+    assert not w.has("sub") and w.has("bsd") and w.has("bsc") and w.has("bsm")   # backside power
+    assert w.layers["mdi"].material == "mdi_ox"
+    n_top = max(s.zmax for s in w.layers["sheet_n"].solids)
+    p_bot = min(s.zmin for s in w.layers["sheet_p"].solids)
+    assert n_top < cfet.MDI[0] < cfet.MDI[1] < p_bot                          # PMOS above NMOS
+    out = ctx.lay["contacts"]["out"]
+    deep = min(s.zmin for s in w.layers["plug"].solids if s.xmin >= out[0] - 1e-9 and s.xmax <= out[1] + 1e-9)
+    assert deep < min(s.zmin for s in w.layers["psd"].solids)                 # Vout reaches the bottom drain
+    # bottom WF metal is n-type, the top one p-type
+    assert max(s.zmax for s in w.layers["wfn"].solids) <= cfet.MDI[0] + 1e-9
+
+
+def test_generations_scale():
+    """Each generation runs at a lower VDD; multi-gate devices beat planar 28 nm on DIBL and swing."""
+    keys = list(FLOWS)
+    vdds = [FLOWS[k].default_params().vdd for k in keys]
+    assert vdds == sorted(vdds, reverse=True)
+    s = {k: summarize_cached(FLOWS[k].default_params(), FLOWS[k].features) for k in keys}
+    for k in keys:
+        assert 0.2 < s[k].vtn < 0.6 and -0.6 < s[k].vtp < -0.2, k
+        assert s[k].vtc.nmh > 0.2 * FLOWS[k].default_params().vdd, k
+    assert s["finfet"].dibl_n < s["hkmg"].dibl_n and s["gaa"].dibl_n < s["finfet"].dibl_n
+    assert s["finfet"].ss_n < s["hkmg"].ss_n and s["gaa"].ss_n < s["finfet"].ss_n
+    assert s["hkmg"].tran.tphl < s["sti"].tran.tphl and s["finfet"].tran.tphl < s["hkmg"].tran.tphl

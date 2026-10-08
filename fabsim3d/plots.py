@@ -196,17 +196,23 @@ class PlotRenderer:
 
     def vtl(self, p: ProcessParams, f=frozenset(), ref=None):
         """NMOS threshold vs gate length: roll-off (low Vds) and DIBL (Vds = VDD)."""
+        nano = p.l_um < 0.1                   # advanced node: zoom the L axis into the nm range
         ax = self._ax(i18n.pick("NMOS 阈值电压随栅长变化 (短沟道效应)", "NMOS Vt vs gate length (short-channel effects)"),
+                      i18n.pick("栅长 L (nm, 对数)", "gate length L (nm, log)") if nano else
                       i18n.pick("栅长 L (µm, 对数)", "gate length L (µm, log)"), "Vtn (V)")
-        ls, lin, sat = vt_vs_length(p, f, "n")
-        ideal = nmos(p, frozenset()).vt_mag
+        lr = (0.008, 0.3) if nano else (0.1, 5.0)
+        ls, lin, sat = vt_vs_length(p, f, "n", *lr)
+        if p.tsi_nm > 0:                      # multi-gate: Vt is set by the work function, not doping
+            ideal = nmos(p.copy(l_um=10.0), f).vt_mag
+        else:
+            ideal = nmos(p, frozenset()).vt_mag
         ax.axhline(ideal, color=C_MUTED, lw=1, ls="--", label=i18n.pick("理想 (无二级效应)", "ideal (no 2nd-order effects)"))
         if "ldd" in f:
-            _, _, sat0 = vt_vs_length(p, frozenset(f) - {"ldd"}, "n")
+            _, _, sat0 = vt_vs_length(p, frozenset(f) - {"ldd"}, "n", *lr)
             ax.plot(ls, sat0, color=C_MUTED, lw=1.4, ls=":",
                     label=i18n.pick("无 LDD 深结, Vds = VDD", "no LDD (deep xj), Vds = VDD"))
         if ref:
-            _, rlin, rsat = vt_vs_length(ref[0], ref[1], "n")
+            _, rlin, rsat = vt_vs_length(ref[0], ref[1], "n", *lr)
             ax.plot(ls, rlin, color=C_REF, lw=1.4, label=self._ref_label())
             ax.plot(ls, rsat, color=C_REF, lw=1.4)
         ax.plot(ls, lin, color=C_N, lw=2, label="|Vds| = 0.05 V")
@@ -218,10 +224,10 @@ class PlotRenderer:
                     textcoords="offset points", xytext=(10, -14), color=TEXT2, fontsize=10)
         ax.set_xscale("log")
         ax.set_xlim(ls[0], ls[-1])
-        ticks = [0.1, 0.18, 0.25, 0.5, 1, 2, 5]
+        ticks = [0.01, 0.02, 0.03, 0.05, 0.1, 0.2] if nano else [0.1, 0.18, 0.25, 0.5, 1, 2, 5]
         ax.xaxis.set_major_locator(FixedLocator(ticks))
         ax.xaxis.set_minor_locator(NullLocator())
-        ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
+        ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v * 1e3:g}" if nano else f"{v:g}"))
         lo = min(float(sat.min()), 0.0)
         if "ldd" in f:
             lo = min(lo, float(sat0.min()))
