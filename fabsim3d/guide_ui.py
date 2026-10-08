@@ -160,7 +160,8 @@ class GuideMixin:
     def _sync_controls(self):
         """Move every slider (params tab, elec tab, guide page) to the current values."""
         from .app import PARAM_SLIDERS
-        for sl, (key, _lk, lo, hi, log) in zip(getattr(self, "param_widgets", []), PARAM_SLIDERS):
+        for sl, (key, _lk, lo, hi, log) in zip(getattr(self, "param_widgets", []),
+                                               self.flow.sliders or PARAM_SLIDERS):
             sl["value"] = _to_unit(getattr(self.params, key), lo, hi, log)
         if hasattr(self, "vin_slider"):
             self.vin_slider["value"] = self.vin / self.params.vdd
@@ -248,7 +249,7 @@ class GuideMixin:
         y -= _h(tr_txt) + 0.02
         done = r.done[r.idx]
         # embedded controls
-        specs = {k: (lk, lo, hi, log) for k, lk, lo, hi, log in PARAM_SLIDERS}
+        specs = {k: (lk, lo, hi, log) for k, lk, lo, hi, log in self.flow.sliders or PARAM_SLIDERS}
         for c in t.controls:
             if c.startswith("param:"):
                 key = c[6:]
@@ -337,4 +338,4 @@ def _param_text(key, lk, v, log):
     from .process_core import sci
     if log:
         return tr(lk, v=sci(v, "cm^-3" if key == "na_cm3" else "cm^-2"))
-    return tr(lk, v=v)
+    return tr(lk, v=v, nm=v * 1e3)

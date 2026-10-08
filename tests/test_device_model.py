@@ -111,3 +111,30 @@ def test_punch_through_device_is_normally_on():
     m = nmos(p, frozenset({"sce"}))
     assert m.vt_mag < 0
     assert float(m.ids(0.0, p.vdd)) > 1e-5
+
+
+def test_metal_gate_work_function():
+    """A metal with the work function of n+ / p+ poly gives the poly-gate Vt; a
+    higher NMOS work function raises Vtn one-for-one."""
+    p = ProcessParams()
+    poly_n, poly_p = nmos(p).vt, pmos(p).vt
+    assert math.isclose(nmos(p.copy(wf_n_ev=4.05)).vt, poly_n, abs_tol=1e-9)
+    assert math.isclose(pmos(p.copy(wf_p_ev=4.05 + 1.12)).vt, poly_p, abs_tol=1e-9)
+    assert math.isclose(nmos(p.copy(wf_n_ev=4.35)).vt - nmos(p.copy(wf_n_ev=4.25)).vt, 0.1, rel_tol=1e-6)
+
+
+def test_multigate_electrostatics():
+    """More gates and a thinner body shrink the natural length: less DIBL, steeper swing."""
+    from fabsim3d.device_model import natural_length_cm
+    p = ProcessParams(tox_nm=0.9, na_cm3=1e16, l_um=0.02, tsi_nm=8.0, wf_n_ev=4.45, wf_p_ev=4.77,
+                      vdd=0.8, lambda_um=0.002)
+    assert natural_length_cm(p, 4) < natural_length_cm(p, 3) < natural_length_cm(p, 2)
+    fin, gaa = frozenset({"sce", "finfet"}), frozenset({"sce", "gaa"})
+    assert nmos(p, gaa).dibl < nmos(p, fin).dibl
+    assert nmos(p.copy(tsi_nm=5), fin).dibl < nmos(p, fin).dibl
+    assert 60 < nmos(p, gaa).ss_mv_dec < nmos(p, fin).ss_mv_dec < 80
+    # fully depleted, undoped body: channel doping barely matters, the work function sets Vt
+    assert abs(nmos(p.copy(na_cm3=1e17), fin).vt - nmos(p, fin).vt) < 0.01
+    assert nmos(p.copy(wf_n_ev=4.55), fin).vt > nmos(p, fin).vt + 0.09
+    s = summarize(p, fin)
+    assert abs(s.vtc.vm - p.vdd / 2) < 0.15

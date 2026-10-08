@@ -238,6 +238,7 @@ class CmosApp(GuideMixin, ShowBase):
         self.flow = FLOWS[key]
         self.params = self.flow.default_params()
         self.vin = self.params.vdd / 2
+        self.tran_t = None                 # a transient of the previous generation stops
         self.quiz_results = {}
         self.playing = False
         self.anim_step = None
@@ -462,8 +463,13 @@ class CmosApp(GuideMixin, ShowBase):
         if abs(v - old) <= 1e-6 * abs(old):
             return
         setattr(self.params, key, v)
-        label.setText(tr(lkey, v=sci(v, "cm^-3" if key == "na_cm3" else "cm^-2") if log else v))
+        label.setText(self._param_text(key, lkey, v, log))
         self.params_dirty = True
+
+    @staticmethod
+    def _param_text(key, lkey, v, log):
+        from .guide_ui import _param_text
+        return _param_text(key, lkey, v, log)
 
     def _commit_params(self):
         self.params_dirty = False
@@ -606,15 +612,19 @@ class CmosApp(GuideMixin, ShowBase):
         self._text(f, i18n.pick(*self.flow.node), (0.03, -0.118), 0.024, TXT2, wrap=LEFT_W - 0.06)
         self.flow_btns = {}
         keys = list(FLOWS)
-        fw = (LEFT_W - 0.06 - 0.01 * (len(keys) - 1)) / len(keys)
+        per_row = 3                      # generations, oldest first, three per row
+        nrows = (len(keys) + per_row - 1) // per_row
+        fw = (LEFT_W - 0.06 - 0.01 * (per_row - 1)) / per_row
         for k, key in enumerate(keys):
+            col, r = k % per_row, k // per_row
             self.flow_btns[key] = self._button(
-                f, i18n.pick(*FLOWS[key].name), (0.03 + fw / 2 + k * (fw + 0.01), -0.205), fw,
-                lambda key=key: self.set_flow(key), on=key == self.flow.key, scale=0.029)
+                f, i18n.pick(*FLOWS[key].label), (0.03 + fw / 2 + col * (fw + 0.01), -0.205 - r * 0.058), fw,
+                lambda key=key: self.set_flow(key), on=key == self.flow.key, scale=0.027)
+        list_top = -0.245 - (nrows - 1) * 0.058
 
         n = len(self.steps)
         row = 0.05
-        sf = DirectScrolledFrame(parent=f, frameSize=(0.02, LEFT_W - 0.02, -1.0, -0.245),
+        sf = DirectScrolledFrame(parent=f, frameSize=(0.02, LEFT_W - 0.02, -1.0, list_top),
                                  canvasSize=(0, LEFT_W - 0.08, -n * row - 0.01, 0),
                                  frameColor=(0.06, 0.065, 0.075, 1), scrollBarWidth=0.022,
                                  verticalScroll_frameColor=(0.12, 0.13, 0.15, 1),
@@ -723,14 +733,13 @@ class CmosApp(GuideMixin, ShowBase):
         self.tab_params = pa
         y = -0.17
         self.param_widgets = []
-        for key, lkey, lo, hi, log in PARAM_SLIDERS:
+        for key, lkey, lo, hi, log in self.flow.sliders or PARAM_SLIDERS:
             v = getattr(self.params, key)
             if log:
                 x = (math.log10(v) - math.log10(lo)) / (math.log10(hi) - math.log10(lo))
-                txt = tr(lkey, v=sci(v, "cm^-3" if key == "na_cm3" else "cm^-2"))
             else:
                 x = (v - lo) / (hi - lo)
-                txt = tr(lkey, v=v)
+            txt = self._param_text(key, lkey, v, log)
             lab = self._text(pa, txt, (x0, y), 0.03, TXT)
             sl = self._slider(pa, (x0, y - 0.045), RIGHT_W - 0.08, min(max(x, 0), 1), None)
             sl["command"] = (lambda key=key, lo=lo, hi=hi, log=log, sl=sl, lab=lab, lkey=lkey:
@@ -907,7 +916,7 @@ class CmosApp(GuideMixin, ShowBase):
             f"Vtn = {s.vtn:+.3f} V\nVtp = {s.vtp:+.3f} V\n"
             f"Idsat,n = {s.idsat_n * 1e3:.3f} mA\nIdsat,p = {s.idsat_p * 1e3:.3f} mA\n"
             f"Ioff,n = {s.ioff_n:.2e} A\n"
-            f"xj = {s.xj_um * 1e3:.0f} nm")
+            + (f"xj = {s.xj_um * 1e3:.0f} nm" if s.xj_um > 0 else f"tsi = {p.tsi_nm:.1f} nm"))
         self.metrics_text2.setText(
             f"VM = {r.vm:.3f} V\nNMH = {r.nmh:.2f} V\nNML = {r.nml:.2f} V\n"
             f"tpHL = {s.tran.tphl * 1e12:.1f} ps\ntpLH = {s.tran.tplh * 1e12:.1f} ps\n"

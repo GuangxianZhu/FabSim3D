@@ -16,6 +16,11 @@ Model summary
 * Transient response by RK2 integration of CL*dVout/dt = Idp - Idn.
 * Process-dependent second-order effects are applied through the EFFECTS
   chain, selected by the flow's feature set (e.g. {"locos"}, {"sti", "cmp"}).
+* Metal gates (HKMG): when wf_n_ev / wf_p_ev are set, the gate work function
+  replaces the n+/p+ poly in phi_ms, and tox is read as the EOT.
+* Multi-gate devices (features "finfet" / "gaa"): an undoped fully depleted
+  body whose short-channel behaviour is set by the natural length lambda of
+  an N-gate structure instead of junction depth and doping.
 """
 from __future__ import annotations
 
@@ -32,6 +37,7 @@ EPS_OX = 3.9 * EPS0
 NI = 1.0e10            # cm^-3 at 300 K
 PHIT = 0.02585         # kT/q at 300 K (V)
 EG_HALF = 0.56         # Eg/2 of Si (V)
+CHI_SI = 4.05          # electron affinity of Si (eV)
 NWELL_DEPTH_CM = 2.0e-4  # junction depth after drive-in (2 um)
 
 
@@ -52,6 +58,11 @@ class ProcessParams:
     vsat_p: float = 8.0e6         # hole saturation velocity cm/s
     qf_cm2: float = 1.0e10        # fixed oxide charge density
     lambda_um: float = 0.05       # CLM: lambda = lambda_um / L[um]  (1/V)
+    # advanced nodes (0 = not used, i.e. the classic poly-gate bulk device)
+    wf_n_ev: float = 0.0          # NMOS metal-gate work function (eV)
+    wf_p_ev: float = 0.0          # PMOS metal-gate work function (eV)
+    xj_nm: float = 0.0            # S/D extension junction depth (planar)
+    tsi_nm: float = 0.0           # fin width / nanosheet thickness (multi-gate)
 
     @property
     def nd_cm3(self) -> float:
@@ -130,14 +141,19 @@ def _mos(p: ProcessParams, polarity: str) -> Mosfet:
     qdep = math.sqrt(2 * EPS_SI * Q * doping * 2 * phi_f)
     gamma = math.sqrt(2 * Q * EPS_SI * doping) / c
     qf_over_cox = Q * p.qf_cm2 / c
+    wf = p.wf_n_ev if polarity == "n" else p.wf_p_ev
     if polarity == "n":
         phi_ms = -(EG_HALF + phi_f)          # n+ poly on p-Si
+        if wf > 0:                           # metal gate: phi_m - (chi + Eg/2 + phi_f)
+            phi_ms = wf - (CHI_SI + EG_HALF + phi_f)
         vfb = phi_ms - qf_over_cox
         vt = vfb + 2 * phi_f + qdep / c
         mu = p.mu_n
         w = p.wn_um
     else:
         phi_ms = EG_HALF + phi_f             # p+ poly on n-Si
+        if wf > 0:                           # metal gate on n-Si
+            phi_ms = wf - (CHI_SI + EG_HALF - phi_f)
         vfb = phi_ms - qf_over_cox
         vt = vfb - 2 * phi_f - qdep / c
         mu = p.mu_p
@@ -201,10 +217,14 @@ def short_channel_effect(p: ProcessParams, m: Mosfet, features: FrozenSet[str]) 
       natural length l = sqrt(eps_si/eps_ox * tox * sqrt(xj * xdm))
       (thinner oxide, shallower junctions and heavier doping all shorten l)
     * Velocity saturation: Id / (1 + Vds_eff/(Ec*L)),  Ec = 2*vsat/mu
+    * Slope degradation: n -> n / (1 - 2*sigma)
     """
-    if "sce" not in features:
+    if "sce" not in features or _gates(features):
         return m
-    xj = (XJ_LDD_UM if "ldd" in features else XJ_DEEP_UM) * 1e-4
+    if p.xj_nm > 0:      # advanced planar node: shallow extension, deep S/D about 3x deeper
+        xj = p.xj_nm * (1 if "ldd" in features else 3) * 1e-7
+    else:
+        xj = (XJ_LDD_UM if "ldd" in features else XJ_DEEP_UM) * 1e-4
     L = m.l_um * 1e-4
     qdep_cox = m.gamma * math.sqrt(2 * m.phi_f)
     xdm = _xdm_cm(m)
@@ -215,11 +235,70 @@ def short_channel_effect(p: ProcessParams, m: Mosfet, features: FrozenSet[str]) 
     vsat = p.vsat_n if m.polarity == "n" else p.vsat_p
     ec_l = 2 * vsat / mu * L
     sign = 1.0 if m.polarity == "n" else -1.0
-    return replace(m, vt=m.vt - sign * rolloff, dibl=sigma, ec_l=ec_l,
+    # the drain also degrades the sub-threshold slope through the same coupling
+    n = m.n / max(1.0 - 2.0 * sigma, 0.2)
+    return replace(m, vt=m.vt - sign * rolloff, dibl=sigma, ec_l=ec_l, n=n,
                    xj_um=xj * 1e4, vt_rolloff=rolloff)
 
 
-EFFECTS: List[Effect] = [narrow_width_effect, short_channel_effect]
+def _gates(features: FrozenSet[str]) -> int:
+    """Equivalent number of gates around the channel (Colinge): 0 = planar bulk."""
+    if "gaa" in features:
+        return 4
+    if "finfet" in features:
+        return 3
+    return 0
+
+
+PSI_INV = PHIT * math.log(1e18 / NI)   # band bending for n = 1e18 cm^-3 at the surface (V)
+VBI_EFF = 0.5                          # built-in potential seen across the channel ends (V)
+
+
+def natural_length_cm(p: ProcessParams, n_gates: int) -> float:
+    """Electrostatic scale length of an N-gate thin body (Suzuki / Colinge):
+        lambda = sqrt(eps_si/(N*eps_ox) * tsi * tox * (1 + eps_ox*tsi/(4*eps_si*tox)))
+    A thinner body, thinner EOT and more gates all shrink lambda, i.e. the
+    gate keeps control over a shorter channel."""
+    tsi = p.tsi_nm * 1e-7
+    tox = p.tox_nm * 1e-7
+    return math.sqrt(EPS_SI / (n_gates * EPS_OX) * tsi * tox * (1 + EPS_OX * tsi / (4 * EPS_SI * tox)))
+
+
+def multigate_effect(p: ProcessParams, m: Mosfet, features: FrozenSet[str]) -> Mosfet:
+    """FinFET / gate-all-around device (features "finfet" (3 gates) or "gaa" (4)).
+
+    The undoped thin body is fully depleted, so Vt is set by the gate work
+    function, not by channel doping, and there is almost no body effect:
+        Vtn = (WF - chi - Eg/2) + psi_inv + q*N*tsi/(N_g*Cox) + dE_qc - roll-off
+    Short-channel effects follow exp(-L / 2*lambda):
+        DIBL sigma = exp(-L/2l),  n = 1 / (1 - 2 exp(-L/2l)),
+        roll-off = 2*Vbi*exp(-L/2l)
+    """
+    ng = _gates(features)
+    if not ng or p.tsi_nm <= 0:
+        return m
+    c = cox(p)
+    lam = natural_length_cm(p, ng)
+    L = m.l_um * 1e-4
+    e = math.exp(-L / (2 * lam))
+    n = 1.0 / max(1.0 - 2.0 * e, 0.2)
+    rolloff = 2 * VBI_EFF * e
+    qbody = Q * m.doping * p.tsi_nm * 1e-7 / ng / c
+    qc = 0.3 / p.tsi_nm ** 2                    # quantum-confinement shift (V), ~10 mV at 5 nm
+    wf = p.wf_n_ev if m.polarity == "n" else p.wf_p_ev
+    if m.polarity == "n":
+        wf = wf or CHI_SI + EG_HALF
+        vt = (wf - CHI_SI - EG_HALF) + PSI_INV + qbody + qc - rolloff
+    else:
+        wf = wf or CHI_SI + EG_HALF
+        vt = (wf - CHI_SI - EG_HALF) - PSI_INV - qbody - qc + rolloff
+    mu = p.mu_n if m.polarity == "n" else p.mu_p
+    vsat = p.vsat_n if m.polarity == "n" else p.vsat_p
+    return replace(m, vt=vt, n=n, gamma=0.02, dibl=e, ec_l=2 * vsat / mu * L,
+                   xj_um=0.0, vt_rolloff=rolloff)
+
+
+EFFECTS: List[Effect] = [narrow_width_effect, short_channel_effect, multigate_effect]
 
 
 def nmos(p: ProcessParams, features: FrozenSet[str] = frozenset()) -> Mosfet:
