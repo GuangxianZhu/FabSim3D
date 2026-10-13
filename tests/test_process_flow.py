@@ -218,3 +218,16 @@ def test_generations_scale():
     assert s["finfet"].dibl_n < s["hkmg"].dibl_n and s["gaa"].dibl_n < s["finfet"].dibl_n
     assert s["finfet"].ss_n < s["hkmg"].ss_n and s["gaa"].ss_n < s["finfet"].ss_n
     assert s["hkmg"].tran.tphl < s["sti"].tran.tphl and s["finfet"].tran.tphl < s["hkmg"].tran.tphl
+
+
+def test_ray_enter_prism():
+    from fabsim3d.geometry import Solid
+    b = Solid.box(0, 2, 0, 4, -1, 0)
+    assert b.ray_enter((1, 2, 10), (0, 0, -1)) == pytest.approx(10)       # from above
+    assert b.ray_enter((5, 2, 10), (0, 0, -1)) is None                    # beside it
+    assert b.ray_enter((1, -5, -0.5), (0, 1, 0)) == pytest.approx(5)      # through the front face
+    assert b.ray_enter((1, -5, -0.5), (0, 1, 0), y_min=3) == pytest.approx(8)   # cut away to y=3
+    assert b.ray_enter((1, -5, -0.5), (0, 1, 0), y_min=4) is None
+    tri = Solid([(0, 0), (2, 0), (1, 2)], 0, 1)                           # clockwise works too
+    assert tri.ray_enter((1.5, 0.5, 5), (0, 0, -1)) == pytest.approx(4)
+    assert Solid(tri.poly[::-1], 0, 1).ray_enter((1.5, 0.5, 5), (0, 0, -1)) == pytest.approx(4)

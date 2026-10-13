@@ -29,6 +29,12 @@ FinFET → GAA 纳米片 → CFET（NMOS/PMOS 上下堆叠）**。每一代都�
 
 ![CFET：NMOS/PMOS 上下堆叠 + 背面供电](docs/screenshot_cfet.png)
 
+![鼠标悬停：提示框给出材料名，该层在 3D 中提亮，图例同步高亮](docs/screenshot_hover.png)
+
+**鼠标悬停识别材料**：颜色一多就难以分辨，把鼠标放在 3D 视图里任意一层上，旁边会弹出该层的材料名，
+这一层在 3D 中提亮，右侧图例里对应的条目也变成黄色。隔着半透明的层间介质看下层时，
+提示框会额外注明“透过 层间介质”。
+
 ## 运行
 
 ### Windows 一键启动
@@ -44,6 +50,9 @@ FinFET → GAA 纳米片 → CFET（NMOS/PMOS 上下堆叠）**。每一代都�
 如果提示找不到 Python，请从 [python.org](https://www.python.org/downloads/) 安装 64 位 Python 3，安装时勾选 “Add python.exe to PATH”。
 命令行参数可以直接传给脚本，例如 `start.bat --lang en`、`start.bat --lesson 1`。
 环境出问题时，删除 `.venv` 文件夹再双击即可重建。
+
+如果仓库是用 git 克隆的、当前分支是 `main`，每次启动前会先执行 `git pull --ff-only origin main` 检查更新：
+有新版本就自动更新后再启动；没网或本地有改动时跳过更新、照常启动。不想检查更新可以先 `set FABSIM3D_NOUPDATE=1`。
 
 ### 手动运行
 

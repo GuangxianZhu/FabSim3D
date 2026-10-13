@@ -641,6 +641,38 @@ class WaferScene:
             np_.setPos(*pos)
             np_.setAlphaScale(0.15 + 0.85 * a)
 
+    # ---------------------------------------------------------------- picking
+    def pick(self, origin, direction) -> List[Tuple[float, str, str]]:
+        """Layers hit by a ray, front to back: [(t, layer name, material)].
+
+        Works on the model geometry rather than the rendered triangles, so it
+        matches what is drawn after the cross-section cut.  Solids that share a
+        face (an implant drawn inside the substrate, say) enter at the same t;
+        those are ordered by material priority, the same rule the renderer uses
+        (depth offset) to decide which colour shows."""
+        if not self.wafer:
+            return []
+        hits = {}
+        for name, layer in self.wafer.layers.items():
+            m = mat(layer.material)
+            if m.color[3] <= 0.0 or not layer.solids:
+                continue
+            ts = [t for s in layer.solids
+                  if (t := s.ray_enter(origin, direction, self.cut_y)) is not None]
+            if ts:
+                hits[name] = (min(ts), m.priority, layer.material)
+        order = sorted(hits.items(), key=lambda kv: (round(kv[1][0], 4), -kv[1][1]))
+        return [(t, name, material) for name, (t, _, material) in order]
+
+    def highlight(self, name: Optional[str]):
+        """Brighten one layer.  Called every frame: layer nodes are rebuilt during
+        animations, so a highlight set once would be lost."""
+        for n, node in self.layer_nodes.items():
+            if n == name:
+                node.setColorScale(1.45, 1.45, 1.45, 1)
+            elif node.hasColorScale():
+                node.clearColorScale()
+
     # ---------------------------------------------------------------- options
     def set_cut(self, y: float):
         self.cut_y = y

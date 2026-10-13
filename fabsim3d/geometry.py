@@ -78,6 +78,46 @@ class Solid:
     def contains_xy(self, x: float, y: float) -> bool:
         return self.xmin - EPS <= x <= self.xmax + EPS and self.y0 - EPS <= y <= self.y1 + EPS
 
+    def ray_enter(self, o, d, y_min: float = -1e9) -> float | None:
+        """Ray parameter t >= 0 where o + t*d enters this prism (the part with
+        y >= y_min, i.e. what the cross-section shows), or None if it misses.
+
+        Cyrus-Beck clipping: the prism is the intersection of the y slab and one
+        half-plane per polygon edge, so the hit interval is [max enter, min exit]."""
+        t0, t1 = 0.0, float("inf")
+        ya, yb = max(self.y0, y_min), self.y1
+        if yb - ya <= 1e-4:
+            return None
+        if abs(d[1]) < 1e-12:
+            if not ya <= o[1] <= yb:
+                return None
+        else:
+            ta, tb = (ya - o[1]) / d[1], (yb - o[1]) / d[1]
+            t0, t1 = max(t0, min(ta, tb)), min(t1, max(ta, tb))
+        poly = self.poly
+        n = len(poly)
+        area2 = sum(poly[i][0] * poly[(i + 1) % n][1] - poly[(i + 1) % n][0] * poly[i][1]
+                    for i in range(n))
+        sgn = 1.0 if area2 >= 0 else -1.0
+        for i in range(n):
+            (xa, za), (xb, zb) = poly[i], poly[(i + 1) % n]
+            ex, ez = xb - xa, zb - za
+            # inside  <=>  sgn * (e x (p - a)) >= 0, linear in t along the ray
+            f0 = sgn * (ex * (o[2] - za) - ez * (o[0] - xa))
+            fd = sgn * (ex * d[2] - ez * d[0])
+            if abs(fd) < 1e-12:
+                if f0 < 0:
+                    return None
+                continue
+            t = -f0 / fd
+            if fd > 0:
+                t0 = max(t0, t)
+            else:
+                t1 = min(t1, t)
+            if t0 > t1:
+                return None
+        return t0
+
     def scaled_z(self, anchor: float, s: float) -> "Solid":
         poly = [(x, anchor + (z - anchor) * s) for x, z in self.poly]
         return Solid(poly, self.y0, self.y1, self.anchor)

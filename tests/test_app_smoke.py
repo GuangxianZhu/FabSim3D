@@ -116,3 +116,55 @@ def test_guide_mode_runs_every_lesson(app):
     assert app.tip_frame.getChildren().getNumPaths() > 0     # step tip visible in guide mode
     app.toggle_guide()
     assert app.right_tab == "process" and "guide" not in app.tab_btns
+
+
+class _FakeMouse:
+    """Stands in for the mouse watcher (offscreen windows have no pointer)."""
+    def __init__(self, real, x, y):
+        self.real, self.x, self.y = real, x, y
+
+    def hasMouse(self):
+        return True
+
+    def getMouse(self):
+        from panda3d.core import Point2
+        return Point2(self.x, self.y)
+
+    def getMouseX(self):
+        return self.x
+
+    def __getattr__(self, k):
+        return getattr(self.real, k)
+
+
+def test_hover_names_layer_under_mouse(app):
+    from panda3d.core import Point2, Point3
+    from fabsim3d import i18n
+    from fabsim3d.materials import mat
+    app.set_flow("locos")
+    app.goto(len(app.steps) - 1)
+    app.set_cam("front")
+    app.taskMgr.step()
+    # project the middle of the NMOS gate onto the screen, then hover there
+    gx = sum(app.ctx.lay["gn"]) / 2
+    p2 = Point2()
+    assert app.camLens.project(app.cam.getRelativePoint(app.render, Point3(gx, app.cut_y, 0.4)), p2)
+    left, right = app.view_frac
+    mx = ((p2.x + 1) / 2 * (right - left) + left) * 2 - 1
+    real = app.mouseWatcherNode
+    app.mouseWatcherNode = _FakeMouse(real, mx, p2.y)
+    try:
+        app._update_hover(1e9)
+        assert app.hover_layer is not None
+        material = app.wafer.layers[app.hover_layer].material
+        assert material in ("poly_n", "poly", "gate_ox", "silicide", "metal")
+        assert not app.hover_tip.isHidden()
+        assert i18n.pick(mat(material).zh, mat(material).en) in app.hover_tip.node().getText()
+        from fabsim3d.app import ACCENT
+        assert tuple(app.legend_texts[material].fg) == pytest.approx(ACCENT)   # legend entry lit
+        app.mouseWatcherNode = _FakeMouse(real, -0.99, 0.0)     # over the left panel
+        app._update_hover(2e9)
+        assert app.hover_layer is None and app.hover_tip.isHidden()
+    finally:
+        app.mouseWatcherNode = real
+    app.set_cam("iso")

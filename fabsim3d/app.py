@@ -11,7 +11,7 @@ from direct.gui.DirectGui import (DirectButton, DirectFrame, DirectScrolledFrame
 from direct.gui.OnscreenImage import OnscreenImage
 from direct.gui.OnscreenText import OnscreenText
 from direct.showbase.ShowBase import ShowBase
-from panda3d.core import (AmbientLight, DirectionalLight, Filename, TextNode,
+from panda3d.core import (AmbientLight, DirectionalLight, Filename, Point2, Point3, TextNode,
                           Texture, TransparencyAttrib, Vec3)
 
 from . import i18n
@@ -88,6 +88,23 @@ class CmosApp(GuideMixin, ShowBase):
         self.cam_h, self.cam_p, self.cam_d = -28.0, 30.0, 36.0
         self.drag = None
         self.last_mouse = None
+
+        # hover picking: which layer is under the mouse
+        self.hover_layer = None
+        self.hover_key = None
+        self.hover_next = 0.0
+        self.legend_texts = {}
+        tn = TextNode("hover_tip")
+        tn.setTextColor(*TXT)
+        tn.setCardColor(0.10, 0.20, 0.42, 0.95)      # unlike the black region labels
+        tn.setCardAsMargin(0.35, 0.35, 0.2, 0.15)
+        tn.setCardDecal(True)
+        tn.setFrameColor(*ACCENT)
+        tn.setFrameAsMargin(0.35, 0.35, 0.2, 0.15)
+        self.hover_tip = self.aspect2d.attachNewNode(tn)
+        self.hover_tip.setScale(0.032)
+        self.hover_tip.setBin("gui-popup", 60)
+        self.hover_tip.hide()
 
         # process state
         self.step = 0
@@ -187,7 +204,7 @@ class CmosApp(GuideMixin, ShowBase):
         self.update_camera()
 
     def _mouse_in_view(self):
-        if not self.mouseWatcherNode.hasMouse():
+        if self.mouseWatcherNode is None or not self.mouseWatcherNode.hasMouse():
             return False
         x = (self.mouseWatcherNode.getMouseX() + 1) / 2
         return self.view_frac[0] <= x <= self.view_frac[1] and self.quiz_frame is None
@@ -221,6 +238,67 @@ class CmosApp(GuideMixin, ShowBase):
             k = self.cam_d * 0.6
             self.cam_target -= right * dx * k + up * dy * k
         self.update_camera()
+
+    def _mouse_ray(self):
+        """World-space ray (origin, direction) through the mouse, or None."""
+        if not self._mouse_in_view():
+            return None
+        m = self.mouseWatcherNode.getMouse()
+        left, right = self.view_frac
+        fx = ((m.x + 1) / 2 - left) / (right - left) * 2 - 1     # window -> display region
+        near, far = Point3(), Point3()
+        if not self.camLens.extrude(Point2(fx, m.y), near, far):
+            return None
+        o = self.render.getRelativePoint(self.cam, near)
+        f = self.render.getRelativePoint(self.cam, far)
+        return (o.x, o.y, o.z), (f.x - o.x, f.y - o.y, f.z - o.z)
+
+    def _update_hover(self, now):
+        """Tooltip naming the material under the mouse, plus 3D / legend highlight."""
+        ray = None if self.drag else self._mouse_ray()
+        if ray is None:
+            hits = []
+        else:
+            m = self.mouseWatcherNode.getMouse()
+            cam = self.camera.getPos(), self.camera.getHpr()
+            key = (round(m.x, 4), round(m.y, 4), tuple(cam[0]), tuple(cam[1]), self.cut_y, id(self.wafer))
+            # re-pick when the mouse / view moved, and a few times a second while
+            # the wafer itself changes underneath a still mouse (animations)
+            if key == self.hover_key and now < self.hover_next:
+                self.scene.highlight(self.hover_layer)
+                return
+            self.hover_key, self.hover_next = key, now + 0.25
+            hits = self.scene.pick(*ray)
+        main = next((h for h in hits if mat(h[2]).color[3] >= 0.99), hits[0] if hits else None)
+        name = main[1] if main else None
+        self.scene.highlight(name)
+        if name != self.hover_layer:
+            self.hover_layer = name
+            self._refresh_legend_hover()
+        if not main:
+            self.hover_tip.hide()
+            return
+        m_ = mat(main[2])
+        lines = [i18n.pick(m_.zh, m_.en)]
+        above = [i18n.pick(mat(h[2]).zh, mat(h[2]).en) for h in hits[:hits.index(main)]]
+        if above:
+            lines.append(tr("hover_through", m="、".join(above) if i18n.LANG == "zh" else ", ".join(above)))
+        tn = self.hover_tip.node()
+        tn.setText("\n".join(lines))
+        mp = self.mouseWatcherNode.getMouse()
+        x = mp.x * self.getAspectRatio()
+        w = tn.getWidth() * 0.032
+        right_edge = (self.view_frac[1] * 2 - 1) * self.getAspectRatio()
+        x = x + 0.03 if x + 0.03 + w < right_edge - 0.02 else x - 0.03 - w
+        self.hover_tip.setPos(x, 0, mp.y - 0.06)
+        self.hover_tip.show()
+
+    def _refresh_legend_hover(self):
+        cur = None
+        if self.hover_layer and self.wafer and self.hover_layer in self.wafer.layers:
+            cur = self.wafer.layers[self.hover_layer].material
+        for m, t in self.legend_texts.items():
+            t.setFg(ACCENT if m == cur else TXT2)
 
     # ================================================================= process control
     @property
@@ -351,6 +429,7 @@ class CmosApp(GuideMixin, ShowBase):
         dt = min(now - self.last_time, 0.1)
         self.last_time = now
         self._handle_drag()
+        self._update_hover(now)
         if self.scene.update(dt, self.speed) and self.anim_step is not None:
             self._phase_finished()
         if self.playing and self.anim_step is None and not self.quiz_frame:
@@ -888,6 +967,7 @@ class CmosApp(GuideMixin, ShowBase):
         y -= 0.04
         for c in self.legend_frame.getChildren():
             c.removeNode()
+        self.legend_texts = {}
         self._text(self.legend_frame, tr("legend"), (-RIGHT_W + 0.03, y), 0.034, ACCENT)
         y -= 0.055
         mats = []
@@ -902,7 +982,9 @@ class CmosApp(GuideMixin, ShowBase):
             col = mat(m).color
             DirectFrame(parent=self.legend_frame, frameColor=(col[0], col[1], col[2], 1),
                         frameSize=(0, 0.035, -0.008, 0.022), pos=(cx, 0, cy))
-            self._text(self.legend_frame, i18n.pick(mat(m).zh, mat(m).en), (cx + 0.05, cy), 0.026, TXT2)
+            self.legend_texts[m] = self._text(self.legend_frame, i18n.pick(mat(m).zh, mat(m).en),
+                                              (cx + 0.05, cy), 0.026, TXT2)
+        self._refresh_legend_hover()
 
         # ---- electrical
         s = summarize_cached(self.params, self.flow.features)

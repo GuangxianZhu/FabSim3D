@@ -11,6 +11,22 @@ setlocal
 cd /d "%~dp0"
 title FabSim3D
 
+rem ---------- pull the latest main (only on branch main, fast-forward only) ----------
+rem  Set FABSIM3D_NOUPDATE=1 to skip.  The whole update runs inside one ( ) block,
+rem  which cmd parses before executing, because git may rewrite this very file;
+rem  afterwards the (possibly new) start.bat is re-run from the top.
+set "BRANCH="
+if not defined FABSIM3D_NOUPDATE if exist ".git\" (
+    for /f "delims=" %%B in ('git rev-parse --abbrev-ref HEAD 2^>nul') do set "BRANCH=%%B"
+)
+if /i "%BRANCH%"=="main" (
+    echo [FabSim3D] Checking for updates on main ...
+    git pull --ff-only origin main || echo [FabSim3D] Update skipped ^(offline or local changes^), starting the current version.
+    set "FABSIM3D_NOUPDATE=1"
+    call "%~f0" %*
+    exit /b
+)
+
 set "VENV=.venv"
 set "VPY=%VENV%\Scripts\python.exe"
 set "STAMP=%VENV%\requirements.installed"
