@@ -1,7 +1,19 @@
-"""Short 'why does this step exist' tips per process step (shown in guide mode)."""
+"""Short 'why does this step exist' tips per process step (shown in guide mode).
+
+【中文说明】每个工艺步骤的“这一步为什么要做”小提示，在引导模式下显示在工艺页里。
+这个文件只有数据，没有计算逻辑。
+
+数据结构：STEP_TIPS 是一个“字典”（dict），即“键 → 值”的对照表：
+    键   步骤的内部名字，如 "padox"（与 fabsim3d/flows/ 里各流程定义的步骤 key 一一对应）；
+    值   (中文提示, 英文提示) 两段文字，界面按当前语言挑一个显示。
+提示尽量用生活中的比喻（地基、雨伞、模板喷漆……），让零基础的人也能明白每一步的目的。
+测试 tests/test_lessons.py 会检查每个流程的每一步在这里都有提示。
+"""
 
 STEP_TIPS = {
     # ---------------------------------------------------------------- shared / LOCOS
+    # 【共用 / LOCOS 流程】最经典的平面 CMOS 工艺（局部氧化隔离）。这里的很多步骤（栅氧、多晶硅、源漏注入、
+    # 金属等）后面几套流程也会用到，同一个步骤名只写一次提示。
     "wafer": ("硅片就是“地基”。P 型的意思是掺了少量硼，硅里多出可以移动的“空穴”（缺一个电子的位置）。",
               "The wafer is the foundation. 'p-type' means a little boron was added, leaving mobile "
               "'holes' (missing electrons)."),
@@ -73,6 +85,7 @@ STEP_TIPS = {
              "Done! Open a lesson on the guide tab and change parameters to see how the process "
              "shapes performance."),
     # ---------------------------------------------------------------- STI flow
+    # 【STI 流程】用“挖浅沟再填氧化物”代替 LOCOS 的隔离方式，并加入 LDD 和侧墙（0.25 µm 时代）。
     "sti_litho": ("和 LOCOS 一样先定有源区，但接下来不是“长”隔离层，而是在硅上“挖沟”再填满。",
                   "As with LOCOS the active areas come first, but isolation will be dug as trenches "
                   "and filled rather than grown."),
@@ -118,6 +131,7 @@ STEP_TIPS = {
                 "Thick glass, then polish flat: flatter than the old high-temperature reflow, and cooler."),
 
     # ---------------------------------------------------------------- 28 nm HKMG (gate-last)
+    # 【28 nm 高 k 金属栅（后栅工艺）】先放多晶硅“替身栅”，最后换成高 k 介质 + 金属栅；铜互连。
     "dummy_gate": ("先放一个“替身”栅：它扛过后面所有高温步骤，最后被真正的金属栅换掉。",
                    "First a stand-in gate: it survives all the hot steps and is swapped for the real metal gate at the end."),
     "sige_sd": ("在 PMOS 两头塞进晶格更大的 SiGe，像从两边挤压海绵，沟道被压紧，空穴跑得更快。",
@@ -137,6 +151,7 @@ STEP_TIPS = {
     "cu_m1": ("铜刻不动，就先在介质里挖沟、再把铜“灌”进去，最后磨平。",
               "Copper can't be etched, so trenches are cut in the dielectric, copper is poured in and polished flat."),
     # ---------------------------------------------------------------- FinFET
+    # 【FinFET 鳍式晶体管】沟道竖起来做成“鳍”，栅从三面包住它。
     "fin_litho": ("鳍的间距比光的分辨率还小，要用“侧墙”技巧把线条数量翻倍。",
                   "Fins are closer than light can resolve, so a spacer trick doubles the number of lines."),
     "fin_etch": ("把硅片刻成一排排竖着的“薄墙”：将来电流就在这些墙里流。",
@@ -154,6 +169,7 @@ STEP_TIPS = {
     "fin_epi_p": ("PMOS 一侧长掺硼的 SiGe，顺便把沟道压紧。",
                   "The PMOS side grows boron-doped SiGe, which also squeezes the channel."),
     # ---------------------------------------------------------------- GAA
+    # 【GAA 全环绕栅】沟道是几片叠起来的纳米片，栅从四面完全包住每一片。
     "superlattice": ("像做千层饼：一层 SiGe 一层 Si 交替叠上去。Si 是将来的沟道，SiGe 最后会被掏空。",
                      "Like a layer cake: SiGe and Si alternate. The Si becomes the channel; the SiGe is hollowed out later."),
     "stack_litho": ("用极紫外光 (EUV) 一次画出叠层的形状。", "Extreme-UV light prints the stack shape in one go."),
@@ -165,6 +181,7 @@ STEP_TIPS = {
                      "The SiGe under the spacers becomes insulating inner spacers so the metal gate can't touch the S/D."),
     "gaa_epi": ("从每片纳米片的端头长出源漏，把几片并联起来。", "S/D grows from every sheet end and ties the sheets in parallel."),
     # ---------------------------------------------------------------- CFET
+    # 【CFET 互补堆叠】把 PMOS 直接叠在 NMOS 上面，并从晶圆背面供电。
     "cfet_sl": ("千层饼分上下两半：下面两片做 NMOS，上面两片做 PMOS，中间夹一层将来变成绝缘体的隔层。",
                 "The cake has two halves: two NMOS sheets below, two PMOS sheets above, and a layer between that becomes an insulator."),
     "cfet_dummy_gate": ("上下两个晶体管共用一个栅，它就是反相器的输入。", "Both transistors share one gate: the inverter input."),
