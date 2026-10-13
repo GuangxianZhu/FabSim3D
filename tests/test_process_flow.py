@@ -231,3 +231,9 @@ def test_ray_enter_prism():
     tri = Solid([(0, 0), (2, 0), (1, 2)], 0, 1)                           # clockwise works too
     assert tri.ray_enter((1.5, 0.5, 5), (0, 0, -1)) == pytest.approx(4)
     assert Solid(tri.poly[::-1], 0, 1).ray_enter((1.5, 0.5, 5), (0, 0, -1)) == pytest.approx(4)
+
+
+def test_every_material_explains_its_role():
+    from fabsim3d.materials import MATERIALS
+    for m in MATERIALS.values():
+        assert m.role_zh and m.role_en, m.key

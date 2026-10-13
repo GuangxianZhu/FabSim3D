@@ -12,7 +12,7 @@ from direct.gui.OnscreenImage import OnscreenImage
 from direct.gui.OnscreenText import OnscreenText
 from direct.showbase.ShowBase import ShowBase
 from panda3d.core import (AmbientLight, DirectionalLight, Filename, Point2, Point3, TextNode,
-                          Texture, TransparencyAttrib, Vec3)
+                          TextProperties, TextPropertiesManager, Texture, TransparencyAttrib, Vec3)
 
 from . import i18n
 from .device_model import ProcessParams, inverter_vout, nmos, pmos
@@ -105,6 +105,11 @@ class CmosApp(GuideMixin, ShowBase):
         self.hover_tip.setScale(0.032)
         self.hover_tip.setBin("gui-popup", 60)
         self.hover_tip.hide()
+        # 提示框第一行（材料名）用黄色：TextNode 支持在文字里用 \1名字\1 ... \2 切换样式，
+        # 这里先登记一个叫 "hov_title" 的样式 / a yellow style for the tooltip title
+        title_style = TextProperties()
+        title_style.setTextColor(*ACCENT)
+        TextPropertiesManager.getGlobalPtr().setProperties("hov_title", title_style)
 
         # process state
         self.step = 0
@@ -279,18 +284,30 @@ class CmosApp(GuideMixin, ShowBase):
             self.hover_tip.hide()
             return
         m_ = mat(main[2])
-        lines = [i18n.pick(m_.zh, m_.en)]
+        # 第一行：黄色的材料名 / line 1: material name in yellow
+        lines = ["\1hov_title\1" + i18n.pick(m_.zh, m_.en) + "\2"]
+        # 第二行（可选）：鼠标和这层之间隔着的半透明层 / translucent layers in front of it
         above = [i18n.pick(mat(h[2]).zh, mat(h[2]).en) for h in hits[:hits.index(main)]]
         if above:
             lines.append(tr("hover_through", m="、".join(above) if i18n.LANG == "zh" else ", ".join(above)))
+        # 后面几行：这种材料是干什么用的，按宽度自动换行 / what it is for, wrapped
+        role = i18n.pick(m_.role_zh, m_.role_en)
+        if role:
+            lines.append(self.wrap(role, 0.78, 0.032))
         tn = self.hover_tip.node()
         tn.setText("\n".join(lines))
+        # 放在鼠标右下方；靠近视图右边缘就改放左边，靠近底部就改放上方，免得被挡住
+        # place it below-right of the mouse, flipping left / up near the view edges
         mp = self.mouseWatcherNode.getMouse()
         x = mp.x * self.getAspectRatio()
         w = tn.getWidth() * 0.032
+        h = tn.getHeight() * 0.032
         right_edge = (self.view_frac[1] * 2 - 1) * self.getAspectRatio()
         x = x + 0.03 if x + 0.03 + w < right_edge - 0.02 else x - 0.03 - w
-        self.hover_tip.setPos(x, 0, mp.y - 0.06)
+        y = mp.y - 0.06
+        if y - h < -0.97:
+            y = mp.y + 0.04 + h - tn.getLineHeight() * 0.032
+        self.hover_tip.setPos(x, 0, y)
         self.hover_tip.show()
 
     def _refresh_legend_hover(self):
